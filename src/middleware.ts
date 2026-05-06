@@ -3,6 +3,19 @@ import { NextRequest, NextResponse } from "next/server";
 
 const PUBLIC_PATHS = ["/login", "/api/auth", "/api/auth/config"];
 
+function getPublicOrigin(req: NextRequest): string {
+  const configuredOrigin = process.env.APP_BASE_URL?.trim().replace(/\/$/, "");
+  if (configuredOrigin) return configuredOrigin;
+
+  const forwardedHost = req.headers.get("x-forwarded-host");
+  const forwardedProto = req.headers.get("x-forwarded-proto");
+  if (forwardedHost) {
+    return `${forwardedProto ?? "https"}://${forwardedHost}`;
+  }
+
+  return req.nextUrl.origin;
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
@@ -26,7 +39,7 @@ export async function middleware(req: NextRequest) {
 
   const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
   if (!token) {
-    const loginUrl = new URL("/login", req.url);
+    const loginUrl = new URL("/login", getPublicOrigin(req));
     loginUrl.searchParams.set("callbackUrl", pathname);
     return NextResponse.redirect(loginUrl);
   }
