@@ -20,4 +20,4 @@ p.user.count().then(c => {
 " && npx tsx prisma/seed.ts 2>&1 || true
 
 echo "==> Starting Next.js..."
-exec npm run start
+exec npm run start -- -H 0.0.0.0 -p "${PORT:-3000}"
