@@ -20,4 +20,11 @@ p.user.count().then(c => {
 " && npx tsx prisma/seed.ts 2>&1 || true
 
 echo "==> Starting Next.js..."
-exec npm run start -- -H 0.0.0.0 -p "${PORT:-3000}"
+export PORT="${PORT:-3000}"
+export HOSTNAME="${HOSTNAME:-0.0.0.0}"
+
+if [ -f ".next/standalone/server.js" ]; then
+  exec node .next/standalone/server.js
+fi
+
+exec npm run start -- -H "$HOSTNAME" -p "$PORT"
