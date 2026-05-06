@@ -17,8 +17,8 @@
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
-    "next": "14.2.18",
-    "next-auth": "^4.24.13",
+    "next": "^15.5.15",
+    "next-auth": "^4.24.14",
     "nodemailer": "^7.0.13",
     "prisma": "^5.22.0",
     "react": "^18.3.1",
@@ -31,9 +31,26 @@
     "@types/nodemailer": "^7.0.11",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "autoprefixer": "^10.4.20",
-    "postcss": "^8.4.47",
+    "autoprefixer": "^10.5.0",
+    "postcss": "^8.5.14",
     "tailwindcss": "^3.4.14",
     "typescript": "^5.6.3"
+  },
+  "overrides": {
+    "anymatch": {
+      "picomatch": "2.3.2"
+    },
+    "micromatch": {
+      "picomatch": "2.3.2"
+    },
+    "readdirp": {
+      "picomatch": "2.3.2"
+    },
+    "fdir": {
+      "picomatch": "4.0.4"
+    },
+    "tinyglobby": {
+      "picomatch": "4.0.4"
+    }
   }
 }
