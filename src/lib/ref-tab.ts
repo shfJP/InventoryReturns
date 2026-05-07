@@ -87,6 +87,29 @@ function idSetHas(idSet: Set<string>, match: string): boolean {
   return Array.from(idSet).some((id) => id.toLowerCase() === lower);
 }
 
+function normalizeKey(value: string | null | undefined): string | null {
+  const normalized = value?.trim().toLowerCase();
+  return normalized ? normalized : null;
+}
+
+async function buildUserAliasMap(): Promise<Map<string, string>> {
+  const users = await prisma.user.findMany({
+    select: { employeeId: true, email: true, upn: true },
+  });
+  const aliases = new Map<string, string>();
+  for (const user of users) {
+    for (const value of [user.employeeId, user.email, user.upn]) {
+      const key = normalizeKey(value);
+      if (key) aliases.set(key, user.employeeId);
+    }
+  }
+  return aliases;
+}
+
+function resolveAssigneeEmployeeId(rawAssignee: string, aliases: Map<string, string>): string | null {
+  return aliases.get(normalizeKey(rawAssignee) ?? "") ?? null;
+}
+
 /**
  * Fetch equipment for the given employee IDs from Reftab.
  * Uses GET /assets (see Reftab API docs), then filters by REF_TAB_ASSIGNEE_FIELD (dot-path supported).
@@ -252,7 +275,12 @@ async function fetchAllReftabAssets(): Promise<RefTabAssignment[]> {
   return out;
 }
 
-export type ReftabSyncResult = { upserted: number; skippedCollected: number; total: number };
+export type ReftabSyncResult = {
+  upserted: number;
+  skippedCollected: number;
+  skippedUnmatchedAssignee: number;
+  total: number;
+};
 
 /**
  * Sync all Reftab assets into local EquipmentAssignment table.
@@ -262,8 +290,10 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
   const assets = await fetchAllReftabAssets();
   console.info(`[reftab] Starting database sync for ${assets.length} mapped asset(s).`);
   const now = new Date();
+  const userAliases = await buildUserAliasMap();
   let upserted = 0;
   let skippedCollected = 0;
+  let skippedUnmatchedAssignee = 0;
 
   // Get all collected asset+employee combinations
   const collectedEvents = await prisma.collectionEvent.findMany({
@@ -275,7 +305,14 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
   );
 
   for (const asset of assets) {
-    const key = `${asset.asset_tag}-${asset.assigned_to_employee_id}`;
+    const resolvedEmployeeId = resolveAssigneeEmployeeId(asset.assigned_to_employee_id, userAliases);
+    if (!resolvedEmployeeId) {
+      skippedUnmatchedAssignee++;
+      console.warn(`[reftab] Skipping asset ${asset.asset_tag}: assignee "${asset.assigned_to_employee_id}" does not match any local user employeeId, email, or UPN.`);
+      continue;
+    }
+
+    const key = `${asset.asset_tag}-${resolvedEmployeeId}`;
     if (collectedSet.has(key)) {
       skippedCollected++;
       continue;
@@ -285,19 +322,20 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
       where: {
         assetTag_assignedToEmployeeId: {
           assetTag: asset.asset_tag,
-          assignedToEmployeeId: asset.assigned_to_employee_id,
+          assignedToEmployeeId: resolvedEmployeeId,
         },
       },
       update: {
         serial: asset.serial ?? null,
         model: asset.model ?? null,
+        assignedToEmployeeId: resolvedEmployeeId,
         lastSyncedAt: now,
       },
       create: {
         assetTag: asset.asset_tag,
         serial: asset.serial ?? null,
         model: asset.model ?? null,
-        assignedToEmployeeId: asset.assigned_to_employee_id,
+        assignedToEmployeeId: resolvedEmployeeId,
         source: "ref_tab",
         lastSyncedAt: now,
       },
@@ -305,8 +343,8 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
     upserted++;
   }
 
-  const result = { upserted, skippedCollected, total: assets.length };
-  console.info(`[reftab] Sync complete: total=${result.total}, upserted=${result.upserted}, skippedCollected=${result.skippedCollected}.`);
+  const result = { upserted, skippedCollected, skippedUnmatchedAssignee, total: assets.length };
+  console.info(`[reftab] Sync complete: total=${result.total}, upserted=${result.upserted}, skippedCollected=${result.skippedCollected}, skippedUnmatchedAssignee=${result.skippedUnmatchedAssignee}.`);
   return result;
 }
 

@@ -2,9 +2,15 @@
 set -e
 
 if [ -z "${DATABASE_URL:-}" ] || [ "$DATABASE_URL" = "file:./dev.db" ] || [ "$DATABASE_URL" = "file:dev.db" ]; then
-  mkdir -p "$PWD/prisma"
-  export DATABASE_URL="file:$PWD/prisma/dev.db"
+  if mkdir -p /data 2>/dev/null; then
+    export DATABASE_URL="file:/data/dev.db"
+  else
+    mkdir -p "$PWD/prisma"
+    export DATABASE_URL="file:$PWD/prisma/dev.db"
+  fi
 fi
+
+echo "==> Using DATABASE_URL=${DATABASE_URL}"
 
 echo "==> Running prisma db push (create/sync tables)..."
 npx prisma db push --skip-generate --accept-data-loss 2>&1

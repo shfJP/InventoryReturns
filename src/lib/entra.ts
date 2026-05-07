@@ -74,6 +74,8 @@ export type SyncResult = {
   created: number;
   updated: number;
   deactivated: number;
+  missingFromEntra: number;
+  unresolvedCollectionsLogged: number;
   managersWithReports: number;
   reportLinksUpdated: number;
   directReportFetchFailures: number;
@@ -96,11 +98,16 @@ export async function syncEntraToDb(): Promise<SyncResult> {
 
   const token = await getAccessToken();
   const graphUsers = await fetchAllGraphUsers(token);
+  if (graphUsers.length === 0) {
+    throw new Error("Graph /users returned zero users; refusing to mark existing users inactive.");
+  }
   const now = new Date();
 
   let created = 0;
   let updated = 0;
   let deactivated = 0;
+  let missingFromEntra = 0;
+  let unresolvedCollectionsLogged = 0;
   let managersWithReports = 0;
   let reportLinksUpdated = 0;
   let directReportFetchFailures = 0;
@@ -111,6 +118,7 @@ export async function syncEntraToDb(): Promise<SyncResult> {
     const empId = gu.employeeId || gu.userPrincipalName;
     graphIdToEmployeeId.set(gu.id, empId);
   }
+  const syncedEmployeeIds = new Set(graphIdToEmployeeId.values());
 
   // 1) Upsert all users (without manager for now)
   for (const gu of graphUsers) {
@@ -146,7 +154,88 @@ export async function syncEntraToDb(): Promise<SyncResult> {
     }
   }
 
-  // 2) Resolve manager relationships from each user's expanded manager link.
+  // 2) Users that disappear from Entra are treated as terminated. Preserve their
+  // manager relationship, mark them inactive, and log any still-assigned items.
+  const missingUsers = await prisma.user.findMany({
+    where: {
+      isActive: true,
+      employeeId: { notIn: Array.from(syncedEmployeeIds) },
+    },
+    select: {
+      id: true,
+      employeeId: true,
+      displayName: true,
+      email: true,
+      managerId: true,
+      manager: {
+        select: {
+          employeeId: true,
+          displayName: true,
+          email: true,
+        },
+      },
+    },
+  });
+
+  for (const user of missingUsers) {
+    const assignedItems = await prisma.equipmentAssignment.findMany({
+      where: { assignedToEmployeeId: user.employeeId },
+      select: { assetTag: true, serial: true, model: true },
+    });
+    const collectionEvents = await prisma.collectionEvent.findMany({
+      where: {
+        assignedToEmployeeId: user.employeeId,
+        status: { in: ["COLLECTED_PENDING_IT", "CLOSED_OUT"] },
+      },
+      select: { assetTag: true },
+    });
+    const collectedAssetTags = new Set(collectionEvents.map((event) => event.assetTag));
+
+    for (const item of assignedItems) {
+      if (collectedAssetTags.has(item.assetTag)) continue;
+      await prisma.unresolvedCollection.upsert({
+        where: {
+          employeeId_assetTag_status: {
+            employeeId: user.employeeId,
+            assetTag: item.assetTag,
+            status: "UNRESOLVED",
+          },
+        },
+        update: {
+          employeeName: user.displayName,
+          employeeEmail: user.email,
+          managerId: user.managerId,
+          managerEmployeeId: user.manager?.employeeId ?? null,
+          managerName: user.manager?.displayName ?? null,
+          managerEmail: user.manager?.email ?? null,
+          serial: item.serial,
+          model: item.model,
+        },
+        create: {
+          employeeId: user.employeeId,
+          employeeName: user.displayName,
+          employeeEmail: user.email,
+          managerId: user.managerId,
+          managerEmployeeId: user.manager?.employeeId ?? null,
+          managerName: user.manager?.displayName ?? null,
+          managerEmail: user.manager?.email ?? null,
+          assetTag: item.assetTag,
+          serial: item.serial,
+          model: item.model,
+        },
+      });
+      unresolvedCollectionsLogged++;
+    }
+
+    await prisma.user.update({
+      where: { employeeId: user.employeeId },
+      data: { isActive: false, lastSyncedAt: now },
+    });
+    missingFromEntra++;
+    deactivated++;
+  }
+
+  // 3) Resolve manager relationships from each user's expanded manager link.
   const managerIdsWithReports = new Set<string>();
   for (const gu of graphUsers) {
     const managerGraphId = gu.manager?.id;
@@ -176,7 +265,17 @@ export async function syncEntraToDb(): Promise<SyncResult> {
   }
   managersWithReports = managerIdsWithReports.size;
 
-  const result = { created, updated, deactivated, managersWithReports, reportLinksUpdated, directReportFetchFailures, total: graphUsers.length };
+  const result = {
+    created,
+    updated,
+    deactivated,
+    missingFromEntra,
+    unresolvedCollectionsLogged,
+    managersWithReports,
+    reportLinksUpdated,
+    directReportFetchFailures,
+    total: graphUsers.length,
+  };
   console.info(`[entra] Sync complete: ${JSON.stringify(result)}.`);
   return result;
 }

@@ -14,6 +14,7 @@ const reportNav = [
   { href: "/reports/cascade", label: "Cascade Reports" },
   { href: "/reports/collection-by-period", label: "By Period" },
   { href: "/reports/it-collections", label: "IT Collections" },
+  { href: "/reports/unresolved-collections", label: "Unresolved" },
 ];
 
 type SyncState = "unknown" | "good" | "syncing" | "error";

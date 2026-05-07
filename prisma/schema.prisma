@@ -66,6 +66,28 @@ model CollectionEvent {
   updatedAt                     DateTime @updatedAt
 }
 
+model UnresolvedCollection {
+  id                       String   @id @default(cuid())
+  employeeId               String
+  employeeName             String
+  employeeEmail            String?
+  managerId                String?
+  managerEmployeeId        String?
+  managerName              String?
+  managerEmail             String?
+  assetTag                 String
+  serial                   String?
+  model                    String?
+  source                   String   @default("entra_sync")
+  status                   String   @default("UNRESOLVED")
+  detectedAt               DateTime @default(now())
+  resolvedAt               DateTime?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@unique([employeeId, assetTag, status])
+}
+
 model AppSetting {
   key       String   @id
   value     String
