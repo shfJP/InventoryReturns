@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
-import { getCurrentUser } from "@/lib/auth";
+import { NextRequest } from "next/server";
+import { isCurrentUserAdmin } from "@/lib/admin-auth";
 import { syncReftabToDb } from "@/lib/ref-tab";
 
 export const dynamic = "force-dynamic";
 
-export async function POST() {
-  const user = await getCurrentUser();
-  if (!user || !user.isManager) {
+export async function POST(req: NextRequest) {
+  if (!(await isCurrentUserAdmin(req))) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

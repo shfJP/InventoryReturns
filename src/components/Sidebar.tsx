@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -18,6 +19,19 @@ const reportNav = [
 export default function Sidebar() {
   const pathname = usePathname();
   const isPublic = pathname === "/login" || pathname === "/choose-view";
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    if (isPublic) {
+      setIsAdmin(false);
+      return;
+    }
+
+    fetch("/api/me")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setIsAdmin(Boolean(data?.isAdmin)))
+      .catch(() => setIsAdmin(false));
+  }, [isPublic]);
 
   return (
     <aside
@@ -75,12 +89,15 @@ export default function Sidebar() {
             );
           })}
 
-          {/* Admin section */}
-          <div className="mt-4 mb-1 px-3">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">Admin</p>
-          </div>
-          <SyncButton label="Sync Entra" endpoint="/api/admin/sync-entra" />
-          <SyncButton label="Sync Reftab" endpoint="/api/admin/sync-reftab" />
+          {isAdmin && (
+            <>
+              <div className="mt-4 mb-1 px-3">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">Admin</p>
+              </div>
+              <SyncButton label="Sync Entra" endpoint="/api/admin/sync-entra" />
+              <SyncButton label="Sync Reftab" endpoint="/api/admin/sync-reftab" />
+            </>
+          )}
 
           <Link
             href="/choose-view"

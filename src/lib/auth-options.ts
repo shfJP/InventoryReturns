@@ -6,6 +6,26 @@ const TENANT_ID = (process.env.AZURE_AD_TENANT_ID ?? "").trim();
 const CLIENT_ID = (process.env.AZURE_AD_CLIENT_ID ?? "").trim();
 const CLIENT_SECRET = (process.env.AZURE_AD_CLIENT_SECRET ?? "").trim();
 
+function decodeJwtPayload(token: string | undefined): Record<string, unknown> | null {
+  if (!token) return null;
+  const payload = token.split(".")[1];
+  if (!payload) return null;
+
+  try {
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const decoded = Buffer.from(normalized, "base64").toString("utf8");
+    return JSON.parse(decoded) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function getGroupsFromClaims(claims: Record<string, unknown> | null): string[] {
+  const groups = claims?.groups;
+  if (!Array.isArray(groups)) return [];
+  return groups.filter((group): group is string => typeof group === "string");
+}
+
 export function isSSOConfigured(): boolean {
   return !!(TENANT_ID && CLIENT_ID && CLIENT_SECRET && process.env.NEXTAUTH_SECRET);
 }
@@ -41,6 +61,11 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, profile, account }) {
       if (account?.access_token) {
         (token as Record<string, unknown>).accessToken = account.access_token;
+      }
+      const tokenClaims = decodeJwtPayload(account?.id_token);
+      const groups = getGroupsFromClaims(tokenClaims);
+      if (groups.length > 0) {
+        (token as Record<string, unknown>).groups = groups;
       }
       if (profile) {
         const azureProfile = profile as Record<string, unknown>;
