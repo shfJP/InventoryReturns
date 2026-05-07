@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCurrentEmployeeId, getReportEmployeeIds } from "@/lib/auth";
 import { isCurrentUserAdmin } from "@/lib/admin-auth";
 import { prisma } from "@/lib/db";
+import { calculateUnresolvedLossSummary } from "@/lib/loss-summary";
 
 export const dynamic = "force-dynamic";
 
@@ -27,8 +28,7 @@ export async function GET(req: NextRequest) {
     orderBy: [{ detectedAt: "desc" }, { employeeName: "asc" }, { assetTag: "asc" }],
   });
 
-  return NextResponse.json(
-    unresolved.map((entry) => ({
+  const items = unresolved.map((entry) => ({
       id: entry.id,
       employeeId: entry.employeeId,
       employeeName: entry.employeeName,
@@ -43,6 +43,8 @@ export async function GET(req: NextRequest) {
       source: entry.source,
       detectedAt: entry.detectedAt.toISOString(),
       status: entry.status,
-    }))
-  );
+    }));
+  const summary = await calculateUnresolvedLossSummary(unresolved);
+
+  return NextResponse.json({ items, summary });
 }

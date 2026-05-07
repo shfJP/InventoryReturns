@@ -22,6 +22,26 @@ type UnresolvedCollection = {
   status: string;
 };
 
+type LossSummary = {
+  knownActive: { count: number; estimatedValueCents: number };
+  unknown: { count: number; estimatedValueCents: number };
+  total: { count: number; estimatedValueCents: number };
+};
+
+type UnresolvedResponse = {
+  items: UnresolvedCollection[];
+  summary?: LossSummary;
+};
+
+function dollarsFromCents(cents: number) {
+  return (cents / 100).toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 function hasKnownManager(item: UnresolvedCollection) {
   return Boolean(
     item.managerEmployeeId?.trim() ||
@@ -195,6 +215,7 @@ function UnresolvedTable({
 export default function UnresolvedCollectionsPage() {
   const router = useRouter();
   const [items, setItems] = useState<UnresolvedCollection[]>([]);
+  const [summary, setSummary] = useState<LossSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -209,7 +230,15 @@ export default function UnresolvedCollectionsPage() {
         if (!res.ok) throw new Error("Failed to load unresolved collections");
         return res.json();
       })
-      .then((data) => setItems(data))
+      .then((data: UnresolvedResponse | UnresolvedCollection[]) => {
+        if (Array.isArray(data)) {
+          setItems(data);
+          setSummary(null);
+          return;
+        }
+        setItems(data.items);
+        setSummary(data.summary ?? null);
+      })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load unresolved collections"))
       .finally(() => setLoading(false));
   }, [router]);
@@ -246,6 +275,29 @@ export default function UnresolvedCollectionsPage() {
         </div>
       </div>
 
+      {summary && (
+        <div className="grid gap-4 md:grid-cols-3">
+          <LossCard
+            label="Known Active Management"
+            count={summary.knownActive.count}
+            value={summary.knownActive.estimatedValueCents}
+            className="text-purple-700"
+          />
+          <LossCard
+            label="Legacy - Unknown Manager"
+            count={summary.unknown.count}
+            value={summary.unknown.estimatedValueCents}
+            className="text-amber-700"
+          />
+          <LossCard
+            label="Total Estimated Loss"
+            count={summary.total.count}
+            value={summary.total.estimatedValueCents}
+            className="text-red-700"
+          />
+        </div>
+      )}
+
       <section className="space-y-3">
         <div>
           <h2 className="text-lg font-semibold text-[var(--text)]">Known Managers</h2>
@@ -261,6 +313,26 @@ export default function UnresolvedCollectionsPage() {
         </div>
         <UnresolvedTable items={unknownManagerItems} emptyText="No legacy unresolved collections with unknown managers." />
       </section>
+    </div>
+  );
+}
+
+function LossCard({
+  label,
+  count,
+  value,
+  className,
+}: {
+  label: string;
+  count: number;
+  value: number;
+  className: string;
+}) {
+  return (
+    <div className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm">
+      <p className="text-sm text-[var(--muted)]">{label}</p>
+      <p className={`mt-1 text-2xl font-bold ${className}`}>{dollarsFromCents(value)}</p>
+      <p className="mt-1 text-xs text-[var(--muted)]">{count} unresolved item(s)</p>
     </div>
   );
 }

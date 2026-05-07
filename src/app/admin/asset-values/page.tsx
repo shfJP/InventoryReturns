@@ -135,7 +135,7 @@ export default function AssetValuesPage() {
             label="Known Active Management"
             count={summary.knownActive.count}
             value={summary.knownActive.estimatedValueCents}
-            tone="emerald"
+            tone="purple"
           />
           <SummaryCard
             label="Legacy - Unknown Manager"
@@ -206,10 +206,10 @@ function SummaryCard({
   label: string;
   count: number;
   value: number;
-  tone: "emerald" | "amber" | "red";
+  tone: "purple" | "amber" | "red";
 }) {
   const color = {
-    emerald: "text-emerald-700",
+    purple: "text-purple-700",
     amber: "text-amber-700",
     red: "text-red-700",
   }[tone];
