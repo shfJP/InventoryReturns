@@ -21,9 +21,10 @@ export async function PUT(req: NextRequest) {
   const settings = await saveSyncSettings({
     autoSyncOnStartup: Boolean(body.autoSyncOnStartup),
     cronEnabled: Boolean(body.cronEnabled),
-    intervalMinutes: Number(body.intervalMinutes),
     syncEntra: Boolean(body.syncEntra),
+    entraIntervalMinutes: Number(body.entraIntervalMinutes),
     syncReftab: Boolean(body.syncReftab),
+    reftabIntervalMinutes: Number(body.reftabIntervalMinutes),
   });
 
   return NextResponse.json(settings);

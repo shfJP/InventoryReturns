@@ -14,9 +14,10 @@ type ApiUser = {
 type SyncSettings = {
   autoSyncOnStartup: boolean;
   cronEnabled: boolean;
-  intervalMinutes: number;
   syncEntra: boolean;
+  entraIntervalMinutes: number;
   syncReftab: boolean;
+  reftabIntervalMinutes: number;
 };
 
 export default function SettingsPage() {
@@ -165,34 +166,50 @@ export default function SettingsPage() {
               />
             </label>
 
-            <div className="grid gap-4 sm:grid-cols-3">
-              <label className="block">
-                <span className="text-xs font-medium text-[var(--muted)]">Interval minutes</span>
-                <input
-                  type="number"
-                  min={5}
-                  step={5}
-                  value={syncSettings.intervalMinutes}
-                  onChange={(e) => setSyncSettings({ ...syncSettings, intervalMinutes: Number(e.target.value) })}
-                  className="mt-1 w-full rounded-lg border border-[var(--border)] px-3 py-2 text-sm"
-                />
-              </label>
-              <label className="flex items-center gap-2 self-end rounded-lg border border-[var(--border)] px-3 py-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={syncSettings.syncEntra}
-                  onChange={(e) => setSyncSettings({ ...syncSettings, syncEntra: e.target.checked })}
-                />
-                Sync Entra
-              </label>
-              <label className="flex items-center gap-2 self-end rounded-lg border border-[var(--border)] px-3 py-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={syncSettings.syncReftab}
-                  onChange={(e) => setSyncSettings({ ...syncSettings, syncReftab: e.target.checked })}
-                />
-                Sync Reftab
-              </label>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="rounded-lg border border-[var(--border)] p-3">
+                <label className="flex items-center gap-2 text-sm font-medium text-[var(--text)]">
+                  <input
+                    type="checkbox"
+                    checked={syncSettings.syncEntra}
+                    onChange={(e) => setSyncSettings({ ...syncSettings, syncEntra: e.target.checked })}
+                  />
+                  Sync Entra
+                </label>
+                <label className="mt-3 block">
+                  <span className="text-xs font-medium text-[var(--muted)]">Entra interval minutes</span>
+                  <input
+                    type="number"
+                    min={5}
+                    step={5}
+                    value={syncSettings.entraIntervalMinutes}
+                    onChange={(e) => setSyncSettings({ ...syncSettings, entraIntervalMinutes: Number(e.target.value) })}
+                    className="mt-1 w-full rounded-lg border border-[var(--border)] px-3 py-2 text-sm"
+                  />
+                </label>
+              </div>
+
+              <div className="rounded-lg border border-[var(--border)] p-3">
+                <label className="flex items-center gap-2 text-sm font-medium text-[var(--text)]">
+                  <input
+                    type="checkbox"
+                    checked={syncSettings.syncReftab}
+                    onChange={(e) => setSyncSettings({ ...syncSettings, syncReftab: e.target.checked })}
+                  />
+                  Sync Reftab
+                </label>
+                <label className="mt-3 block">
+                  <span className="text-xs font-medium text-[var(--muted)]">Reftab interval minutes</span>
+                  <input
+                    type="number"
+                    min={5}
+                    step={5}
+                    value={syncSettings.reftabIntervalMinutes}
+                    onChange={(e) => setSyncSettings({ ...syncSettings, reftabIntervalMinutes: Number(e.target.value) })}
+                    className="mt-1 w-full rounded-lg border border-[var(--border)] px-3 py-2 text-sm"
+                  />
+                </label>
+              </div>
             </div>
 
             {syncSettingsMessage && (

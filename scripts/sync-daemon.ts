@@ -3,48 +3,50 @@ import { syncReftabToDb } from "../src/lib/ref-tab";
 import { getSyncSettings } from "../src/lib/sync-settings";
 import { prisma } from "../src/lib/db";
 
-let running = false;
-let lastScheduledRunAt = 0;
+let entraRunning = false;
+let reftabRunning = false;
+let lastEntraScheduledRunAt = 0;
+let lastReftabScheduledRunAt = 0;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function runConfiguredSync(reason: string): Promise<void> {
-  if (running) {
-    console.info(`[sync] Skipping ${reason}: sync already running.`);
+async function runEntraSync(reason: string): Promise<void> {
+  if (entraRunning) {
+    console.info(`[sync] Skipping Entra ${reason}: sync already running.`);
     return;
   }
 
-  const settings = await getSyncSettings();
-  if (!settings.syncEntra && !settings.syncReftab) {
-    console.info(`[sync] Skipping ${reason}: no sync sources are enabled.`);
-    return;
-  }
-
-  running = true;
-  console.info(`[sync] Starting ${reason}.`);
+  entraRunning = true;
+  console.info(`[sync] Starting Entra ${reason}.`);
   try {
-    if (settings.syncEntra) {
-      try {
-        const result = await syncEntraToDb();
-        console.info(`[sync] Entra complete: ${JSON.stringify(result)}.`);
-      } catch (e) {
-        console.warn(`[sync] Entra failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
-
-    if (settings.syncReftab) {
-      try {
-        const result = await syncReftabToDb();
-        console.info(`[sync] Reftab complete: ${JSON.stringify(result)}.`);
-      } catch (e) {
-        console.warn(`[sync] Reftab failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
+    const result = await syncEntraToDb();
+    console.info(`[sync] Entra complete: ${JSON.stringify(result)}.`);
+  } catch (e) {
+    console.warn(`[sync] Entra failed: ${e instanceof Error ? e.message : String(e)}`);
   } finally {
-    running = false;
-    console.info(`[sync] Finished ${reason}.`);
+    entraRunning = false;
+    console.info(`[sync] Finished Entra ${reason}.`);
+  }
+}
+
+async function runReftabSync(reason: string): Promise<void> {
+  if (reftabRunning) {
+    console.info(`[sync] Skipping Reftab ${reason}: sync already running.`);
+    return;
+  }
+
+  reftabRunning = true;
+  console.info(`[sync] Starting Reftab ${reason}.`);
+  try {
+    const result = await syncReftabToDb();
+    console.info(`[sync] Reftab complete: ${JSON.stringify(result)}.`);
+  } catch (e) {
+    console.warn(`[sync] Reftab failed: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    reftabRunning = false;
+    console.info(`[sync] Finished Reftab ${reason}.`);
   }
 }
 
@@ -53,8 +55,10 @@ async function main(): Promise<void> {
 
   const initialSettings = await getSyncSettings();
   if (initialSettings.autoSyncOnStartup) {
-    await runConfiguredSync("startup sync");
-    lastScheduledRunAt = Date.now();
+    if (initialSettings.syncEntra) await runEntraSync("startup sync");
+    if (initialSettings.syncReftab) await runReftabSync("startup sync");
+    lastEntraScheduledRunAt = Date.now();
+    lastReftabScheduledRunAt = Date.now();
   }
 
   while (true) {
@@ -62,11 +66,19 @@ async function main(): Promise<void> {
     const settings = await getSyncSettings();
     if (!settings.cronEnabled) continue;
 
-    const intervalMs = Math.max(settings.intervalMinutes, 5) * 60_000;
-    if (Date.now() - lastScheduledRunAt < intervalMs) continue;
+    const now = Date.now();
+    const entraIntervalMs = Math.max(settings.entraIntervalMinutes, 5) * 60_000;
+    const reftabIntervalMs = Math.max(settings.reftabIntervalMinutes, 5) * 60_000;
 
-    await runConfiguredSync(`scheduled sync every ${settings.intervalMinutes} minute(s)`);
-    lastScheduledRunAt = Date.now();
+    if (settings.syncEntra && now - lastEntraScheduledRunAt >= entraIntervalMs) {
+      await runEntraSync(`scheduled sync every ${settings.entraIntervalMinutes} minute(s)`);
+      lastEntraScheduledRunAt = Date.now();
+    }
+
+    if (settings.syncReftab && now - lastReftabScheduledRunAt >= reftabIntervalMs) {
+      await runReftabSync(`scheduled sync every ${settings.reftabIntervalMinutes} minute(s)`);
+      lastReftabScheduledRunAt = Date.now();
+    }
   }
 }
 

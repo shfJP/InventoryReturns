@@ -3,9 +3,10 @@ import { prisma } from "./db";
 export type SyncSettings = {
   autoSyncOnStartup: boolean;
   cronEnabled: boolean;
-  intervalMinutes: number;
   syncEntra: boolean;
+  entraIntervalMinutes: number;
   syncReftab: boolean;
+  reftabIntervalMinutes: number;
 };
 
 const SYNC_SETTINGS_KEY = "syncSettings";
@@ -13,18 +14,27 @@ const SYNC_SETTINGS_KEY = "syncSettings";
 export const DEFAULT_SYNC_SETTINGS: SyncSettings = {
   autoSyncOnStartup: process.env.AUTO_SYNC_ON_STARTUP === "true",
   cronEnabled: process.env.SYNC_CRON_ENABLED === "true",
-  intervalMinutes: Math.max(Number(process.env.SYNC_CRON_INTERVAL_MINUTES) || 60, 5),
   syncEntra: process.env.SYNC_CRON_ENTRA !== "false",
+  entraIntervalMinutes: Math.max(Number(process.env.SYNC_CRON_ENTRA_INTERVAL_MINUTES) || 720, 5),
   syncReftab: process.env.SYNC_CRON_REFTAB !== "false",
+  reftabIntervalMinutes: Math.max(Number(process.env.SYNC_CRON_REFTAB_INTERVAL_MINUTES) || 10, 5),
 };
 
 function normalizeSyncSettings(value: Partial<SyncSettings> | null | undefined): SyncSettings {
+  const legacyInterval = Number((value as Partial<SyncSettings> & { intervalMinutes?: number } | null | undefined)?.intervalMinutes);
+  const entraInterval = value?.entraIntervalMinutes ?? (Number.isFinite(legacyInterval) && legacyInterval > 0
+    ? legacyInterval
+    : DEFAULT_SYNC_SETTINGS.entraIntervalMinutes);
+  const reftabInterval = value?.reftabIntervalMinutes ?? (Number.isFinite(legacyInterval) && legacyInterval > 0
+    ? legacyInterval
+    : DEFAULT_SYNC_SETTINGS.reftabIntervalMinutes);
   return {
     autoSyncOnStartup: Boolean(value?.autoSyncOnStartup ?? DEFAULT_SYNC_SETTINGS.autoSyncOnStartup),
     cronEnabled: Boolean(value?.cronEnabled ?? DEFAULT_SYNC_SETTINGS.cronEnabled),
-    intervalMinutes: Math.max(Number(value?.intervalMinutes ?? DEFAULT_SYNC_SETTINGS.intervalMinutes) || 60, 5),
     syncEntra: Boolean(value?.syncEntra ?? DEFAULT_SYNC_SETTINGS.syncEntra),
+    entraIntervalMinutes: Math.max(Number(entraInterval) || 720, 5),
     syncReftab: Boolean(value?.syncReftab ?? DEFAULT_SYNC_SETTINGS.syncReftab),
+    reftabIntervalMinutes: Math.max(Number(reftabInterval) || 10, 5),
   };
 }
 
