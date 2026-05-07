@@ -1,6 +1,11 @@
 #!/bin/sh
 set -e
 
+if [ -z "${DATABASE_URL:-}" ] || [ "$DATABASE_URL" = "file:./dev.db" ] || [ "$DATABASE_URL" = "file:dev.db" ]; then
+  mkdir -p "$PWD/prisma"
+  export DATABASE_URL="file:$PWD/prisma/dev.db"
+fi
+
 echo "==> Running prisma db push (create/sync tables)..."
 npx prisma db push --skip-generate --accept-data-loss 2>&1
 
