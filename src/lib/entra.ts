@@ -76,7 +76,9 @@ async function fetchDirectReports(
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!res.ok) return [];
+  if (!res.ok) {
+    throw new Error(`Graph /users/${userId}/directReports failed: ${res.status} ${await res.text()}`);
+  }
   const data = (await res.json()) as GraphResponse<{ id: string }>;
   return data.value;
 }
@@ -85,6 +87,9 @@ export type SyncResult = {
   created: number;
   updated: number;
   deactivated: number;
+  managersWithReports: number;
+  reportLinksUpdated: number;
+  directReportFetchFailures: number;
   total: number;
 };
 
@@ -109,6 +114,9 @@ export async function syncEntraToDb(): Promise<SyncResult> {
   let created = 0;
   let updated = 0;
   let deactivated = 0;
+  let managersWithReports = 0;
+  let reportLinksUpdated = 0;
+  let directReportFetchFailures = 0;
 
   // Map Graph id → employeeId for directReports resolution
   const graphIdToEmployeeId = new Map<string, string>();
@@ -151,8 +159,16 @@ export async function syncEntraToDb(): Promise<SyncResult> {
 
   // 2) Resolve manager relationships via directReports
   for (const gu of graphUsers) {
-    const reports = await fetchDirectReports(token, gu.id);
+    let reports: { id: string }[];
+    try {
+      reports = await fetchDirectReports(token, gu.id);
+    } catch (e) {
+      directReportFetchFailures++;
+      console.warn(`[entra] Failed to fetch direct reports for ${gu.userPrincipalName}: ${e instanceof Error ? e.message : String(e)}`);
+      continue;
+    }
     if (reports.length === 0) continue;
+    managersWithReports++;
 
     const managerEmpId = gu.employeeId || gu.userPrincipalName;
     const manager = await prisma.user.findUnique({
@@ -170,12 +186,15 @@ export async function syncEntraToDb(): Promise<SyncResult> {
     for (const report of reports) {
       const reportEmpId = graphIdToEmployeeId.get(report.id);
       if (!reportEmpId) continue;
-      await prisma.user.updateMany({
+      const result = await prisma.user.updateMany({
         where: { employeeId: reportEmpId },
         data: { managerId: manager.id },
       });
+      reportLinksUpdated += result.count;
     }
   }
 
-  return { created, updated, deactivated, total: graphUsers.length };
+  const result = { created, updated, deactivated, managersWithReports, reportLinksUpdated, directReportFetchFailures, total: graphUsers.length };
+  console.info(`[entra] Sync complete: ${JSON.stringify(result)}.`);
+  return result;
 }
