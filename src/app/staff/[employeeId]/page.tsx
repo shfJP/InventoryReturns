@@ -279,7 +279,7 @@ export default function StaffDetailPage() {
                       >
                         <span>{column.label}</span>
                         <span className="text-xs text-[var(--muted)]">
-                          {equipmentSortKey === column.key ? (equipmentSortDirection === "asc" ? "ASC" : "DESC") : "SORT"}
+                          {equipmentSortKey === column.key ? (equipmentSortDirection === "asc" ? "↑" : "↓") : "↑↓"}
                         </span>
                       </button>
                     </th>

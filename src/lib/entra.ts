@@ -188,6 +188,20 @@ export async function syncEntraToDb(): Promise<SyncResult> {
       select: { assetTag: true },
     });
     const collectedAssetTags = new Set(collectionEvents.map((event) => event.assetTag));
+    const collectedAssetTagList = Array.from(collectedAssetTags);
+    for (let i = 0; i < collectedAssetTagList.length; i += 500) {
+      await prisma.unresolvedCollection.updateMany({
+        where: {
+          status: "UNRESOLVED",
+          employeeId: user.employeeId,
+          assetTag: { in: collectedAssetTagList.slice(i, i + 500) },
+        },
+        data: {
+          status: "RESOLVED",
+          resolvedAt: now,
+        },
+      });
+    }
 
     for (const item of assignedItems) {
       if (collectedAssetTags.has(item.assetTag)) continue;

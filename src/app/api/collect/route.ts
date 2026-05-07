@@ -74,6 +74,17 @@ export async function POST(req: NextRequest) {
     await prisma.equipmentAssignment.delete({ where: { id: equipment.id } });
   }
 
+  await prisma.unresolvedCollection.updateMany({
+    where: {
+      status: "UNRESOLVED",
+      assetTag,
+    },
+    data: {
+      status: "RESOLVED",
+      resolvedAt: event.markedCollectedAt,
+    },
+  });
+
   const notifyResult = await notifyItCollected({
     assetTag,
     serial,

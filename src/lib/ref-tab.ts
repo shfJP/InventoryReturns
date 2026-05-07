@@ -835,8 +835,26 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
   const collectedSet = new Set(
     collectedEvents.map((ce) => `${ce.assetTag}-${ce.assignedToEmployeeId}`)
   );
+  const collectedAssetTags = Array.from(new Set(collectedEvents.map((ce) => ce.assetTag)));
+  for (let i = 0; i < collectedAssetTags.length; i += 500) {
+    await prisma.unresolvedCollection.updateMany({
+      where: {
+        status: "UNRESOLVED",
+        assetTag: { in: collectedAssetTags.slice(i, i + 500) },
+      },
+      data: {
+        status: "RESOLVED",
+        resolvedAt: now,
+      },
+    });
+  }
 
   for (const asset of assets) {
+    if (collectedAssetTags.includes(asset.asset_tag)) {
+      skippedCollected++;
+      continue;
+    }
+
     const resolvedEmployeeId = resolveAssigneeEmployeeId(asset.assigned_to_employee_id, userAliases);
     if (!resolvedEmployeeId) {
       skippedUnmatchedAssignee++;

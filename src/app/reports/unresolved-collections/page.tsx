@@ -89,7 +89,7 @@ function SortHeader({
         onClick={() => onSort(column.key)}
       >
         <span>{column.label}</span>
-        <span className="text-xs text-[var(--muted)]">{active ? (sortDirection === "asc" ? "ASC" : "DESC") : "SORT"}</span>
+        <span className="text-xs text-[var(--muted)]">{active ? (sortDirection === "asc" ? "↑" : "↓") : "↑↓"}</span>
       </button>
     </th>
   );
