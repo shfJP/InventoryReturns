@@ -22,4 +22,9 @@ export type DashboardData = {
   staff: Staff[];
   equipment: Equipment[];
   equipmentByEmployee: Record<string, Equipment[]>;
+  syncStatus?: {
+    lastSyncedAt: string | null;
+    reftabSyncedAt: string | null;
+    entraSyncedAt: string | null;
+  };
 };

@@ -12,6 +12,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const result = await syncReftabToDb();
+    console.info(`[admin] Reftab sync requested; result=${JSON.stringify(result)}.`);
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
     return NextResponse.json(

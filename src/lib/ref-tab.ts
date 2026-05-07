@@ -1,4 +1,5 @@
 import { createHash, createHmac } from "crypto";
+import { prisma } from "./db";
 
 /**
  * Reftab integration — see https://www.reftab.com/api-docs
@@ -171,11 +172,16 @@ async function fetchReftabNativeAssets(employeeIds: string[]): Promise<RefTabAss
 
 /** Fetch ALL assets from Reftab (no employee filter) with full pagination. */
 async function fetchAllReftabAssets(): Promise<RefTabAssignment[]> {
-  if (!REF_TAB_PUBLIC || !REF_TAB_SECRET) return [];
+  if (!REF_TAB_PUBLIC || !REF_TAB_SECRET) {
+    console.warn("[reftab] Sync skipped: REF_TAB_API_PUBLIC_KEY or REF_TAB_API_SECRET_KEY is not configured.");
+    return [];
+  }
   const limit = ASSETS_LIMIT;
   const allAssets: Record<string, unknown>[] = [];
   let page = 1;
   const maxPages = 100;
+
+  console.info(`[reftab] Starting asset fetch from ${REF_TAB_URL}/assets with limit=${limit}.`);
 
   while (page <= maxPages) {
     const fullUrl = `${REF_TAB_URL}/assets?limit=${limit}&page=${page}`;
@@ -183,14 +189,19 @@ async function fetchAllReftabAssets(): Promise<RefTabAssignment[]> {
     let res: Response;
     try {
       res = await fetch(fullUrl, { method: "GET", headers, cache: "no-store" });
-    } catch {
+    } catch (e) {
+      console.warn(`[reftab] Page ${page} request failed: ${e instanceof Error ? e.message : String(e)}`);
       break;
     }
-    if (!res.ok) break;
+    if (!res.ok) {
+      console.warn(`[reftab] Page ${page} returned ${res.status}: ${await res.text()}`);
+      break;
+    }
     let data: unknown;
     try {
       data = await res.json();
-    } catch {
+    } catch (e) {
+      console.warn(`[reftab] Page ${page} JSON parse failed: ${e instanceof Error ? e.message : String(e)}`);
       break;
     }
     const list: Record<string, unknown>[] = Array.isArray(data)
@@ -198,6 +209,7 @@ async function fetchAllReftabAssets(): Promise<RefTabAssignment[]> {
       : (data as { data?: unknown }).data != null && Array.isArray((data as { data: unknown }).data)
         ? ((data as { data: Record<string, unknown>[] }).data)
         : [];
+    console.info(`[reftab] Page ${page} returned ${list.length} asset(s).`);
     if (list.length === 0) break;
     allAssets.push(...list);
     if (list.length < limit) break;
@@ -224,6 +236,7 @@ async function fetchAllReftabAssets(): Promise<RefTabAssignment[]> {
       status: stringifyField(asset, "status") ?? undefined,
     });
   }
+  console.info(`[reftab] Fetched ${allAssets.length} raw asset(s); ${out.length} had a usable assignee and asset tag.`);
   return out;
 }
 
@@ -234,9 +247,8 @@ export type ReftabSyncResult = { upserted: number; skippedCollected: number; tot
  * Cross-references CollectionEvent to skip items already collected.
  */
 export async function syncReftabToDb(): Promise<ReftabSyncResult> {
-  const { prisma } = await import("@/lib/db");
-
   const assets = await fetchAllReftabAssets();
+  console.info(`[reftab] Starting database sync for ${assets.length} mapped asset(s).`);
   const now = new Date();
   let upserted = 0;
   let skippedCollected = 0;
@@ -281,7 +293,9 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
     upserted++;
   }
 
-  return { upserted, skippedCollected, total: assets.length };
+  const result = { upserted, skippedCollected, total: assets.length };
+  console.info(`[reftab] Sync complete: total=${result.total}, upserted=${result.upserted}, skippedCollected=${result.skippedCollected}.`);
+  return result;
 }
 
 /** Legacy: custom HTTPS proxy that accepts Bearer + /assignments?employee_id= */

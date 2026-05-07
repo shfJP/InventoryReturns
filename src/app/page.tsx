@@ -40,20 +40,22 @@ function DashboardPageInner() {
     if (!view) return;
     (async () => {
       try {
-        const [meRes, staffRes, eqRes] = await Promise.all([
+        const [meRes, staffRes, eqRes, syncStatusRes] = await Promise.all([
           fetch("/api/me"),
           fetch("/api/staff"),
           fetch("/api/equipment?include_collected=true"),
+          fetch("/api/admin/sync-status"),
         ]);
         if (!meRes.ok) throw new Error("Not authenticated");
         const me = await meRes.json();
         const staff = staffRes.ok ? await staffRes.json() : [];
         const equipment = (eqRes.ok ? await eqRes.json() : []) as Equipment[];
+        const syncStatus = syncStatusRes.ok ? await syncStatusRes.json() : undefined;
         const equipmentByEmployee = equipment.reduce<Record<string, Equipment[]>>((acc, e) => {
           (acc[e.assignedToEmployeeId] = acc[e.assignedToEmployeeId] ?? []).push(e);
           return acc;
         }, {});
-        setData({ me, staff, equipment, equipmentByEmployee });
+        setData({ me, staff, equipment, equipmentByEmployee, syncStatus });
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load");
       } finally {

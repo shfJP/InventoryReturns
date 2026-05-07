@@ -24,6 +24,9 @@ p.user.count().then(c => {
 }).catch(() => process.exit(0)).finally(() => p.\$disconnect());
 " && npx tsx prisma/seed.ts 2>&1 || true
 
+echo "==> Starting background sync worker..."
+npx tsx scripts/sync-daemon.ts 2>&1 &
+
 echo "==> Starting Next.js..."
 export PORT="${PORT:-3000}"
 export HOSTNAME="${HOSTNAME:-0.0.0.0}"

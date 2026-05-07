@@ -8,12 +8,24 @@ type ApiUser = {
   displayName: string;
   email: string;
   isManager: boolean;
+  isAdmin?: boolean;
+};
+
+type SyncSettings = {
+  autoSyncOnStartup: boolean;
+  cronEnabled: boolean;
+  intervalMinutes: number;
+  syncEntra: boolean;
+  syncReftab: boolean;
 };
 
 export default function SettingsPage() {
   const { data: session } = useSession();
   const [user, setUser] = useState<ApiUser | null>(null);
   const [ssoEnabled, setSsoEnabled] = useState<boolean | null>(null);
+  const [syncSettings, setSyncSettings] = useState<SyncSettings | null>(null);
+  const [savingSyncSettings, setSavingSyncSettings] = useState(false);
+  const [syncSettingsMessage, setSyncSettingsMessage] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/auth/config")
@@ -23,13 +35,42 @@ export default function SettingsPage() {
 
     fetch("/api/me")
       .then((r) => (r.ok ? r.json() : null))
-      .then((data) => setUser(data))
+      .then((data) => {
+        setUser(data);
+        if (data?.isAdmin) {
+          fetch("/api/admin/sync-settings")
+            .then((r) => (r.ok ? r.json() : null))
+            .then((settings) => setSyncSettings(settings))
+            .catch(() => setSyncSettings(null));
+        }
+      })
       .catch(() => setUser(null));
   }, []);
 
   const name = user?.displayName ?? session?.user?.name ?? "User";
   const email = user?.email ?? session?.user?.email ?? "";
   const employeeId = user?.employeeId ?? "";
+
+  async function saveSyncSettings() {
+    if (!syncSettings) return;
+    setSavingSyncSettings(true);
+    setSyncSettingsMessage(null);
+    try {
+      const res = await fetch("/api/admin/sync-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(syncSettings),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to save sync settings");
+      setSyncSettings(data);
+      setSyncSettingsMessage("Sync settings saved.");
+    } catch (e) {
+      setSyncSettingsMessage(e instanceof Error ? e.message : "Failed to save sync settings");
+    } finally {
+      setSavingSyncSettings(false);
+    }
+  }
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -80,6 +121,86 @@ export default function SettingsPage() {
           </div>
         </dl>
       </section>
+
+      {user?.isAdmin && syncSettings && (
+        <section className="rounded-lg border border-[var(--border)] bg-white p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">Sync automation</h2>
+            </div>
+            <button
+              type="button"
+              onClick={saveSyncSettings}
+              disabled={savingSyncSettings}
+              className="rounded-lg bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-50"
+            >
+              {savingSyncSettings ? "Saving" : "Save"}
+            </button>
+          </div>
+
+          <div className="mt-4 space-y-4">
+            <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] px-3 py-2">
+              <span>
+                <span className="block text-sm font-medium text-[var(--text)]">Sync on startup</span>
+                <span className="block text-xs text-[var(--muted)]">Run selected syncs when the app container starts.</span>
+              </span>
+              <input
+                type="checkbox"
+                checked={syncSettings.autoSyncOnStartup}
+                onChange={(e) => setSyncSettings({ ...syncSettings, autoSyncOnStartup: e.target.checked })}
+                className="h-4 w-4"
+              />
+            </label>
+
+            <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] px-3 py-2">
+              <span>
+                <span className="block text-sm font-medium text-[var(--text)]">Scheduled sync</span>
+                <span className="block text-xs text-[var(--muted)]">Run selected syncs repeatedly in the background.</span>
+              </span>
+              <input
+                type="checkbox"
+                checked={syncSettings.cronEnabled}
+                onChange={(e) => setSyncSettings({ ...syncSettings, cronEnabled: e.target.checked })}
+                className="h-4 w-4"
+              />
+            </label>
+
+            <div className="grid gap-4 sm:grid-cols-3">
+              <label className="block">
+                <span className="text-xs font-medium text-[var(--muted)]">Interval minutes</span>
+                <input
+                  type="number"
+                  min={5}
+                  step={5}
+                  value={syncSettings.intervalMinutes}
+                  onChange={(e) => setSyncSettings({ ...syncSettings, intervalMinutes: Number(e.target.value) })}
+                  className="mt-1 w-full rounded-lg border border-[var(--border)] px-3 py-2 text-sm"
+                />
+              </label>
+              <label className="flex items-center gap-2 self-end rounded-lg border border-[var(--border)] px-3 py-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={syncSettings.syncEntra}
+                  onChange={(e) => setSyncSettings({ ...syncSettings, syncEntra: e.target.checked })}
+                />
+                Sync Entra
+              </label>
+              <label className="flex items-center gap-2 self-end rounded-lg border border-[var(--border)] px-3 py-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={syncSettings.syncReftab}
+                  onChange={(e) => setSyncSettings({ ...syncSettings, syncReftab: e.target.checked })}
+                />
+                Sync Reftab
+              </label>
+            </div>
+
+            {syncSettingsMessage && (
+              <p className="text-sm text-[var(--muted)]">{syncSettingsMessage}</p>
+            )}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

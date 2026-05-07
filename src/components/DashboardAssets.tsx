@@ -18,7 +18,7 @@ const ASSET_FILTER_OPTIONS = [
 ];
 
 export default function DashboardAssets({ data, initialSearchQuery = "" }: { data: DashboardData; initialSearchQuery?: string }) {
-  const { me, staff, equipment } = data;
+  const { me, staff, equipment, syncStatus } = data;
   const staffById = Object.fromEntries(staff.map((s) => [s.employeeId, s]));
   const [searchQuery, setSearchQuery] = useState(initialSearchQuery);
   const [filterBy, setFilterBy] = useState("all");
@@ -158,11 +158,20 @@ export default function DashboardAssets({ data, initialSearchQuery = "" }: { dat
           </table>
         </div>
         {filteredEquipment.length === 0 && (
-          <p className="py-12 text-center text-[var(--muted)]">
-            {equipment.length === 0
-              ? "No equipment in scope. Run db:seed or connect ref tab API."
-              : "No equipment matches the current search or filter."}
-          </p>
+          <div className="px-4 py-12 text-center text-[var(--muted)]">
+            <p>
+              {equipment.length === 0
+                ? "No equipment in scope. Run db:seed or connect Reftab API."
+                : "No equipment matches the current search or filter."}
+            </p>
+            {equipment.length === 0 && (
+              <p className="mt-2 text-xs">
+                {syncStatus?.reftabSyncedAt
+                  ? `Last Reftab sync: ${new Date(syncStatus.reftabSyncedAt).toLocaleString()}`
+                  : "No Reftab sync has written equipment yet."}
+              </p>
+            )}
+          </div>
         )}
         {filteredEquipment.length > 0 && (
           <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
