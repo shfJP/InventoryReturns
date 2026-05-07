@@ -133,12 +133,9 @@ export default function DashboardTable({ data, initialSearchQuery = "" }: { data
                           </span>
                         )}
                       </div>
-                      {s.isActive !== false && outstanding > 0 && (
-                        <span className="mt-1 inline-flex items-center gap-1 text-xs text-amber-600">
-                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.072 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                          </svg>
-                          Active — Equipment Outstanding
+                      {s.isActive !== false && (
+                        <span className="mt-1 inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                          Active
                         </span>
                       )}
                     </td>

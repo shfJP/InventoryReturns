@@ -17,22 +17,17 @@ type Equipment = {
   statusName?: string;
   details?: Record<string, string>;
   assignedToEmployeeId: string;
-  source: string;
 };
 
 type SortDirection = "asc" | "desc";
-type EquipmentSortKey = "title" | "catName" | "aid" | "assetTag" | "serial" | "model" | "locationName" | "statusName" | "source";
+type EquipmentSortKey = "title" | "catName" | "assetTag" | "serial" | "statusName";
 
 const equipmentColumns: Array<{ key: EquipmentSortKey; label: string }> = [
   { key: "title", label: "Assigned Equipment" },
   { key: "catName", label: "Category" },
-  { key: "aid", label: "AID" },
   { key: "assetTag", label: "Asset Tag" },
   { key: "serial", label: "Serial" },
-  { key: "model", label: "Model" },
-  { key: "locationName", label: "Location" },
   { key: "statusName", label: "Status" },
-  { key: "source", label: "Source" },
 ];
 
 function equipmentTitle(e: Equipment): string {
@@ -55,7 +50,6 @@ function equipmentFilterText(e: Equipment) {
     e.model,
     e.locationName,
     e.statusName,
-    e.source,
     ...detailRows(e).flat(),
   ].filter(Boolean).join(" ").toLowerCase();
 }
@@ -267,7 +261,7 @@ export default function StaffDetailPage() {
           <p className="text-[var(--muted)]">No equipment listed for this employee.</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1200px]">
+            <table className="w-full min-w-[900px]">
               <thead>
                 <tr>
                   {equipmentColumns.map((column) => (
@@ -294,13 +288,9 @@ export default function StaffDetailPage() {
                   <tr key={`${e.assetTag}-${e.assignedToEmployeeId}`} className="border-b border-[var(--border)] transition hover:bg-[var(--table-header-bg)]/50">
                     <td className="table-cell font-medium text-[var(--text)]">{equipmentTitle(e)}</td>
                     <td className="table-cell text-[var(--text-secondary)]">{e.catName ?? "-"}</td>
-                    <td className="table-cell text-[var(--text-secondary)]">{e.aid ?? "-"}</td>
                     <td className="table-cell font-medium text-[var(--text)]">{e.assetTag}</td>
                     <td className="table-cell text-[var(--text-secondary)]">{e.serial ?? "-"}</td>
-                    <td className="table-cell text-[var(--text-secondary)]">{e.model ?? "-"}</td>
-                    <td className="table-cell text-[var(--text-secondary)]">{e.locationName ?? "-"}</td>
                     <td className="table-cell text-[var(--text-secondary)]">{e.statusName ?? "-"}</td>
-                    <td className="table-cell text-[var(--text-secondary)]">{e.source}</td>
                     <td className="table-cell text-xs text-[var(--text-secondary)]">
                       <div className="max-w-[280px] space-y-1">
                         {detailRows(e).map(([label, value]) => (

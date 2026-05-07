@@ -165,6 +165,7 @@ export default function Sidebar() {
                   window.location.reload();
                 }}
               />
+              <AdminLink href="/admin/asset-values" label="Asset Values" active={pathname === "/admin/asset-values"} />
             </>
           )}
 
@@ -178,6 +179,22 @@ export default function Sidebar() {
         </nav>
       )}
     </aside>
+  );
+}
+
+function AdminLink({ href, label, active }: { href: string; label: string; active: boolean }) {
+  return (
+    <Link
+      href={href}
+      className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
+        active
+          ? "bg-[var(--accent)] text-white"
+          : "text-[var(--text-secondary)] hover:bg-gray-200 hover:text-[var(--text)]"
+      }`}
+    >
+      <ReportIcon className="h-4 w-4 shrink-0" />
+      <span>{label}</span>
+    </Link>
   );
 }
 
