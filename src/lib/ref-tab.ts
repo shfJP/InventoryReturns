@@ -23,8 +23,14 @@ const REF_TAB_SYNC_SOURCE = (process.env.REF_TAB_SYNC_SOURCE ?? "assets").trim()
 
 export type RefTabAssignment = {
   asset_tag: string;
+  aid?: string;
   serial?: string;
   model?: string;
+  title?: string;
+  catName?: string;
+  locationName?: string;
+  statusName?: string;
+  details?: Record<string, string>;
   assigned_to_employee_id: string;
   status?: string;
 };
@@ -101,6 +107,56 @@ function firstString(obj: Record<string, unknown>, paths: string[]): string | un
     if (value) return value;
   }
   return undefined;
+}
+
+function compactDetails(details: Record<string, string | undefined>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(details).filter((entry): entry is [string, string] => Boolean(entry[1]))
+  );
+}
+
+function assetDetails(record: Record<string, unknown>): {
+  aid?: string;
+  assetTag?: string;
+  serial?: string;
+  model?: string;
+  title?: string;
+  catName?: string;
+  locationName?: string;
+  statusName?: string;
+  details: Record<string, string>;
+} {
+  const aid = firstString(record, ["aid", "asset.aid"]);
+  const assetTag = firstString(record, ["assetTag", "asset_tag", "assetId", "asset_id", "id", "asset.id", "aid", "asset.aid"]);
+  const serial = firstString(record, ["serial", "serialNumber", "serial_number", "asset.serial", "asset.serialNumber"]);
+  const title = firstString(record, ["title", "name", "asset.title", "asset.name"]);
+  const model = firstString(record, [MODEL_FIELD, "model", "asset.model", "asset.title", "title", "name"]);
+  const catName = firstString(record, ["catName", "categoryName", "category.name", "category", "asset.catName", "asset.categoryName", "asset.category.name"]);
+  const locationName = firstString(record, ["locationName", "location.name", "location", "clName", "asset.locationName", "asset.location.name"]);
+  const statusName = firstString(record, ["statusName", "status.name", "status", "asset.statusName", "asset.status.name", "loan.status"]);
+  return {
+    aid,
+    assetTag,
+    serial,
+    model,
+    title,
+    catName,
+    locationName,
+    statusName,
+    details: compactDetails({
+      aid,
+      assetTag,
+      serial,
+      model,
+      title,
+      catName,
+      locationName,
+      statusName,
+      manufacturer: firstString(record, ["manufacturer", "make", "asset.manufacturer", "asset.make"]),
+      location: locationName,
+      status: statusName,
+    }),
+  };
 }
 
 function listFromResponse(data: unknown): Record<string, unknown>[] {
@@ -257,12 +313,19 @@ function resolveReftabAssigneeFromRecord(record: Record<string, unknown>, loanee
 }
 
 function pushLoanAsset(out: RefTabAssignment[], asset: Record<string, unknown>, fallbackAssignee: string): void {
-  const tag = firstString(asset, ["aid", "assetId", "asset_id", "assetTag", "asset_tag", "id", "asset.id"]);
+  const details = assetDetails(asset);
+  const tag = details.assetTag;
   if (!tag) return;
   out.push({
     asset_tag: tag,
-    serial: firstString(asset, ["serial", "serialNumber", "asset.serial"]),
-    model: firstString(asset, ["title", "model", "name", "asset.title", "asset.model"]),
+    aid: details.aid,
+    serial: details.serial,
+    model: details.model,
+    title: details.title,
+    catName: details.catName,
+    locationName: details.locationName,
+    statusName: details.statusName,
+    details: details.details,
     assigned_to_employee_id: fallbackAssignee,
     status: "out",
   });
@@ -278,7 +341,7 @@ function assignmentsFromLoan(loan: Record<string, unknown>, assignee: string): R
         pushLoanAsset(out, item as Record<string, unknown>, assignee);
       } else {
         const tag = valueToString(item);
-        if (tag) out.push({ asset_tag: tag, assigned_to_employee_id: assignee, status: "out" });
+        if (tag) out.push({ asset_tag: tag, aid: tag, assigned_to_employee_id: assignee, status: "out" });
       }
     }
   }
@@ -287,7 +350,7 @@ function assignmentsFromLoan(loan: Record<string, unknown>, assignee: string): R
   if (Array.isArray(aids)) {
     for (const aid of aids) {
       const tag = valueToString(aid);
-      if (tag) out.push({ asset_tag: tag, assigned_to_employee_id: assignee, status: "out" });
+      if (tag) out.push({ asset_tag: tag, aid: tag, assigned_to_employee_id: assignee, status: "out" });
     }
   }
 
@@ -359,22 +422,25 @@ async function fetchReftabNativeAssets(employeeIds: string[]): Promise<RefTabAss
     const match = resolveReftabAssigneeFromRecord(asset, loaneeMaps);
     if (!match || !idSetHas(idSet, match)) continue;
 
+    const details = assetDetails(asset);
     const tag =
       stringifyField(asset, ASSET_TAG_FIELD) ??
-      (typeof asset.id === "string" ? asset.id : undefined) ??
-      (typeof asset.serial === "string" ? asset.serial : undefined);
+      details.assetTag ??
+      details.serial;
     if (!tag) continue;
-
-    const serial = stringifyField(asset, SERIAL_FIELD);
-    const model = stringifyField(asset, MODEL_FIELD);
-    const status = stringifyField(asset, "status");
 
     out.push({
       asset_tag: tag,
-      serial: serial ?? undefined,
-      model: model ?? undefined,
+      aid: details.aid,
+      serial: stringifyField(asset, SERIAL_FIELD) ?? details.serial,
+      model: stringifyField(asset, MODEL_FIELD) ?? details.model,
+      title: details.title,
+      catName: details.catName,
+      locationName: details.locationName,
+      statusName: details.statusName,
+      details: details.details,
       assigned_to_employee_id: match,
-      status: status ?? undefined,
+      status: details.statusName,
     });
   }
   return out;
@@ -485,18 +551,25 @@ async function fetchAllReftabAssets(): Promise<RefTabAssignment[]> {
       continue;
     }
 
+    const details = assetDetails(asset);
     const tag =
       stringifyField(asset, ASSET_TAG_FIELD) ??
-      (typeof asset.id === "string" ? asset.id : undefined) ??
-      (typeof asset.serial === "string" ? asset.serial : undefined);
+      details.assetTag ??
+      details.serial;
     if (!tag) continue;
 
     out.push({
       asset_tag: tag,
-      serial: stringifyField(asset, SERIAL_FIELD) ?? undefined,
-      model: stringifyField(asset, MODEL_FIELD) ?? undefined,
+      aid: details.aid,
+      serial: stringifyField(asset, SERIAL_FIELD) ?? details.serial,
+      model: stringifyField(asset, MODEL_FIELD) ?? details.model,
+      title: details.title,
+      catName: details.catName,
+      locationName: details.locationName,
+      statusName: details.statusName,
+      details: details.details,
       assigned_to_employee_id: match,
-      status: stringifyField(asset, "status") ?? undefined,
+      status: details.statusName,
     });
   }
   console.info(`[reftab] Fetched ${allAssets.length} checked-out asset(s); ${out.length} had a usable asset tag and loanee; skippedMissingAssignee=${skippedMissingAssignee}.`);
@@ -558,15 +631,27 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
         },
       },
       update: {
+        aid: asset.aid ?? null,
         serial: asset.serial ?? null,
         model: asset.model ?? null,
+        title: asset.title ?? null,
+        catName: asset.catName ?? null,
+        locationName: asset.locationName ?? null,
+        statusName: asset.statusName ?? asset.status ?? null,
+        detailsJson: asset.details ? JSON.stringify(asset.details) : null,
         assignedToEmployeeId: resolvedEmployeeId,
         lastSyncedAt: now,
       },
       create: {
         assetTag: asset.asset_tag,
+        aid: asset.aid ?? null,
         serial: asset.serial ?? null,
         model: asset.model ?? null,
+        title: asset.title ?? null,
+        catName: asset.catName ?? null,
+        locationName: asset.locationName ?? null,
+        statusName: asset.statusName ?? asset.status ?? null,
+        detailsJson: asset.details ? JSON.stringify(asset.details) : null,
         assignedToEmployeeId: resolvedEmployeeId,
         source: "ref_tab",
         lastSyncedAt: now,

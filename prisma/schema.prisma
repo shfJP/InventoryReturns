@@ -30,8 +30,14 @@ model User {
 model EquipmentAssignment {
   id                   String   @id @default(cuid())
   assetTag             String
+  aid                  String?
   serial               String?
   model                String?
+  title                String?
+  catName              String?
+  locationName         String?
+  statusName           String?
+  detailsJson          String?
   assignedToEmployeeId String
   source               String   @default("ref_tab")
   lastSyncedAt         DateTime?

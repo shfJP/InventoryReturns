@@ -8,11 +8,42 @@ import { isLoggedIn } from "@/lib/auth-session";
 type Equipment = {
   id: string | null;
   assetTag: string;
+  aid?: string;
   serial?: string;
   model?: string;
+  title?: string;
+  catName?: string;
+  locationName?: string;
+  statusName?: string;
+  details?: Record<string, string>;
   assignedToEmployeeId: string;
   source: string;
 };
+
+function equipmentTitle(e: Equipment): string {
+  const title = e.title ?? e.model ?? e.assetTag;
+  return e.catName ? `${e.catName} - ${title}` : title;
+}
+
+function detailRows(e: Equipment): Array<[string, string]> {
+  const details: Array<[string, string | undefined]> = [
+    ["AID", e.aid],
+    ["Asset Tag", e.assetTag],
+    ["Serial", e.serial],
+    ["Model", e.model],
+    ["Location", e.locationName],
+    ["Status", e.statusName],
+  ];
+  if (e.details) {
+    for (const [key, value] of Object.entries(e.details)) {
+      const label = key.replace(/([A-Z])/g, " $1").replace(/^./, (char) => char.toUpperCase());
+      if (!details.some(([existing]) => existing.toLowerCase() === label.toLowerCase())) {
+        details.push([label, value]);
+      }
+    }
+  }
+  return details.filter((entry): entry is [string, string] => Boolean(entry[1]));
+}
 
 export default function StaffDetailPage() {
   const params = useParams();
@@ -167,11 +198,16 @@ export default function StaffDetailPage() {
                 key={`${e.assetTag}-${e.assignedToEmployeeId}`}
                 className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--table-header-bg)]/30 p-4"
               >
-                <div>
-                  <p className="font-medium text-[var(--text)]">{e.assetTag}</p>
-                  <p className="text-sm text-[var(--muted)]">
-                    {e.model ?? "—"} {e.serial ? `· ${e.serial}` : ""}
-                  </p>
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium text-[var(--text)]">{equipmentTitle(e)}</p>
+                  <dl className="mt-2 grid gap-x-4 gap-y-1 text-sm sm:grid-cols-2">
+                    {detailRows(e).map(([label, value]) => (
+                      <div key={`${e.assetTag}-${label}`} className="flex min-w-0 gap-1">
+                        <dt className="shrink-0 text-[var(--muted)]">{label}:</dt>
+                        <dd className="truncate text-[var(--text-secondary)]" title={value}>{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
                 </div>
                 <div className="flex flex-1 flex-wrap items-end gap-2 sm:flex-none">
                   <input

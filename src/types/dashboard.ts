@@ -8,8 +8,14 @@ export type Staff = {
 export type Equipment = {
   id: string | null;
   assetTag: string;
+  aid?: string;
   serial?: string;
   model?: string;
+  title?: string;
+  catName?: string;
+  locationName?: string;
+  statusName?: string;
+  details?: Record<string, string>;
   assignedToEmployeeId: string;
   source: string;
   collectionStatus?: "collected" | "outstanding";
