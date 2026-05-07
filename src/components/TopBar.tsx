@@ -3,18 +3,24 @@
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { signOut as nextAuthSignOut } from "next-auth/react";
+import { signOut as nextAuthSignOut, useSession } from "next-auth/react";
 import { logout } from "@/lib/auth-session";
 
 export default function TopBar() {
   const router = useRouter();
+  const { data: session } = useSession();
   const [searchValue, setSearchValue] = useState("");
   const [helpOpen, setHelpOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [syncTime, setSyncTime] = useState<string | null>(null);
   const [ssoEnabled, setSsoEnabled] = useState(false);
+  const [avatarFailed, setAvatarFailed] = useState(false);
   const helpRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
+
+  const userName = session?.user?.name ?? session?.user?.email ?? "User";
+  const userInitial = userName.trim().charAt(0).toUpperCase() || "U";
+  const avatarSrc = ssoEnabled ? "/api/me/avatar" : session?.user?.image ?? null;
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -130,9 +136,32 @@ export default function TopBar() {
             </div>
           )}
         </div>
-        <div className="ml-2 flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border-2 border-[var(--border)] bg-[var(--sidebar-bg)] text-sm font-medium text-[var(--text-secondary)]">
-          U
-        </div>
+        <Link
+          href="/settings"
+          className="rounded-md p-2 text-[var(--text-secondary)] hover:bg-gray-100"
+          aria-label="User settings"
+          title="User settings"
+        >
+          <SettingsIcon className="h-5 w-5" />
+        </Link>
+        <Link
+          href="/settings"
+          className="ml-1 flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border-2 border-[var(--border)] bg-[var(--sidebar-bg)] text-sm font-medium text-[var(--text-secondary)]"
+          aria-label={`User settings for ${userName}`}
+          title={userName}
+        >
+          {avatarSrc && !avatarFailed ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={avatarSrc}
+              alt=""
+              className="h-full w-full object-cover"
+              onError={() => setAvatarFailed(true)}
+            />
+          ) : (
+            <span>{userInitial}</span>
+          )}
+        </Link>
         <button
           type="button"
           onClick={handleSignOut}
@@ -181,6 +210,15 @@ function SyncStatusIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+    </svg>
+  );
+}
+
+function SettingsIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
     </svg>
   );
 }

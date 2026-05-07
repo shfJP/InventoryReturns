@@ -38,7 +38,10 @@ export const authOptions: NextAuthOptions = {
       : []),
   ],
   callbacks: {
-    async jwt({ token, profile }) {
+    async jwt({ token, profile, account }) {
+      if (account?.access_token) {
+        (token as Record<string, unknown>).accessToken = account.access_token;
+      }
       if (profile) {
         const azureProfile = profile as Record<string, unknown>;
         token.oid = (azureProfile.oid as string) ?? undefined;
