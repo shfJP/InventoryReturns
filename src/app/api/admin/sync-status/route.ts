@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { getAllSyncRunStatuses } from "@/lib/sync-status";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const [latestEquipment, latestUser] = await Promise.all([
+  const [latestEquipment, latestUser, runStatus] = await Promise.all([
     prisma.equipmentAssignment.findFirst({
       where: { lastSyncedAt: { not: null } },
       orderBy: { lastSyncedAt: "desc" },
@@ -15,6 +16,7 @@ export async function GET() {
       orderBy: { lastSyncedAt: "desc" },
       select: { lastSyncedAt: true },
     }),
+    getAllSyncRunStatuses(),
   ]);
 
   const reftabSyncedAt = latestEquipment?.lastSyncedAt?.toISOString() ?? null;
@@ -30,5 +32,7 @@ export async function GET() {
     lastSyncedAt,
     reftabSyncedAt,
     entraSyncedAt,
+    entra: runStatus.entra,
+    reftab: runStatus.reftab,
   });
 }

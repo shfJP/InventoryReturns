@@ -20,11 +20,25 @@ type SyncSettings = {
   reftabIntervalMinutes: number;
 };
 
+type SyncRunStatus = {
+  state: "idle" | "running" | "success" | "error";
+  lastStartedAt: string | null;
+  lastFinishedAt: string | null;
+  lastError: string | null;
+  lastResult: unknown | null;
+};
+
+type SyncStatusResponse = {
+  entra?: SyncRunStatus;
+  reftab?: SyncRunStatus;
+};
+
 export default function SettingsPage() {
   const { data: session } = useSession();
   const [user, setUser] = useState<ApiUser | null>(null);
   const [ssoEnabled, setSsoEnabled] = useState<boolean | null>(null);
   const [syncSettings, setSyncSettings] = useState<SyncSettings | null>(null);
+  const [syncStatus, setSyncStatus] = useState<SyncStatusResponse | null>(null);
   const [savingSyncSettings, setSavingSyncSettings] = useState(false);
   const [syncSettingsMessage, setSyncSettingsMessage] = useState<string | null>(null);
 
@@ -43,6 +57,10 @@ export default function SettingsPage() {
             .then((r) => (r.ok ? r.json() : null))
             .then((settings) => setSyncSettings(settings))
             .catch(() => setSyncSettings(null));
+          fetch("/api/admin/sync-status")
+            .then((r) => (r.ok ? r.json() : null))
+            .then((status) => setSyncStatus(status))
+            .catch(() => setSyncStatus(null));
         }
       })
       .catch(() => setUser(null));
@@ -140,6 +158,11 @@ export default function SettingsPage() {
           </div>
 
           <div className="mt-4 space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <SyncStatusCard label="Entra" status={syncStatus?.entra} />
+              <SyncStatusCard label="Reftab" status={syncStatus?.reftab} />
+            </div>
+
             <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] px-3 py-2">
               <span>
                 <span className="block text-sm font-medium text-[var(--text)]">Sync on startup</span>
@@ -220,4 +243,41 @@ export default function SettingsPage() {
       )}
     </div>
   );
+}
+
+function SyncStatusCard({ label, status }: { label: string; status: SyncRunStatus | undefined }) {
+  const state = status?.state ?? "idle";
+  const badgeClassName = {
+    idle: "bg-gray-100 text-gray-700",
+    running: "bg-amber-100 text-amber-800",
+    success: "bg-emerald-100 text-emerald-800",
+    error: "bg-red-100 text-red-800",
+  }[state];
+
+  return (
+    <div className="rounded-lg border border-[var(--border)] p-3">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-[var(--text)]">{label}</h3>
+        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${badgeClassName}`}>{state}</span>
+      </div>
+      <dl className="mt-3 space-y-2 text-xs">
+        <div>
+          <dt className="font-medium text-[var(--muted)]">Last started</dt>
+          <dd className="text-[var(--text)]">{formatDate(status?.lastStartedAt)}</dd>
+        </div>
+        <div>
+          <dt className="font-medium text-[var(--muted)]">Last finished</dt>
+          <dd className="text-[var(--text)]">{formatDate(status?.lastFinishedAt)}</dd>
+        </div>
+        <div>
+          <dt className="font-medium text-[var(--muted)]">Last error</dt>
+          <dd className="break-words text-[var(--text)]">{status?.lastError ?? "None"}</dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
+function formatDate(value: string | null | undefined): string {
+  return value ? new Date(value).toLocaleString() : "Never";
 }

@@ -1,6 +1,7 @@
 import { syncEntraToDb } from "../src/lib/entra";
 import { syncReftabToDb } from "../src/lib/ref-tab";
 import { getSyncSettings } from "../src/lib/sync-settings";
+import { markSyncFailed, markSyncFinished, markSyncStarted } from "../src/lib/sync-status";
 import { prisma } from "../src/lib/db";
 
 let entraRunning = false;
@@ -21,9 +22,12 @@ async function runEntraSync(reason: string): Promise<void> {
   entraRunning = true;
   console.info(`[sync] Starting Entra ${reason}.`);
   try {
+    await markSyncStarted("entra");
     const result = await syncEntraToDb();
+    await markSyncFinished("entra", result);
     console.info(`[sync] Entra complete: ${JSON.stringify(result)}.`);
   } catch (e) {
+    await markSyncFailed("entra", e);
     console.warn(`[sync] Entra failed: ${e instanceof Error ? e.message : String(e)}`);
   } finally {
     entraRunning = false;
@@ -40,9 +44,12 @@ async function runReftabSync(reason: string): Promise<void> {
   reftabRunning = true;
   console.info(`[sync] Starting Reftab ${reason}.`);
   try {
+    await markSyncStarted("reftab");
     const result = await syncReftabToDb();
+    await markSyncFinished("reftab", result);
     console.info(`[sync] Reftab complete: ${JSON.stringify(result)}.`);
   } catch (e) {
+    await markSyncFailed("reftab", e);
     console.warn(`[sync] Reftab failed: ${e instanceof Error ? e.message : String(e)}`);
   } finally {
     reftabRunning = false;

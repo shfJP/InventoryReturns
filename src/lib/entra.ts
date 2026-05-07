@@ -5,11 +5,13 @@
  */
 
 import { prisma } from "./db";
+import { fetchWithTimeout } from "./fetch-timeout";
 
 const TENANT_ID = (process.env.AZURE_AD_TENANT_ID ?? "").trim();
 const CLIENT_ID = (process.env.AZURE_AD_CLIENT_ID ?? "").trim();
 const CLIENT_SECRET = (process.env.AZURE_AD_CLIENT_SECRET ?? "").trim();
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
+const GRAPH_TIMEOUT_MS = Math.max(Number(process.env.GRAPH_REQUEST_TIMEOUT_MS) || 30_000, 5_000);
 
 type GraphUser = {
   id: string;
@@ -18,6 +20,7 @@ type GraphUser = {
   userPrincipalName: string;
   employeeId: string | null;
   accountEnabled: boolean;
+  manager?: { id?: string } | null;
 };
 
 type GraphResponse<T> = {
@@ -34,11 +37,11 @@ async function getAccessToken(): Promise<string> {
     scope: "https://graph.microsoft.com/.default",
     grant_type: "client_credentials",
   });
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
-  });
+  }, GRAPH_TIMEOUT_MS, "Graph token request");
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Failed to acquire token: ${res.status} ${text}`);
@@ -47,16 +50,16 @@ async function getAccessToken(): Promise<string> {
   return data.access_token;
 }
 
-/** Fetch all users from Microsoft Graph with pagination. */
+/** Fetch all users and their manager links from Microsoft Graph with pagination. */
 async function fetchAllGraphUsers(token: string): Promise<GraphUser[]> {
   const users: GraphUser[] = [];
   let url: string | null =
-    `${GRAPH_BASE}/users?$select=id,displayName,mail,userPrincipalName,employeeId,accountEnabled&$top=100`;
+    `${GRAPH_BASE}/users?$select=id,displayName,mail,userPrincipalName,employeeId,accountEnabled&$expand=manager($select=id)&$top=100`;
 
   while (url) {
-    const res: Response = await fetch(url, {
+    const res: Response = await fetchWithTimeout(url, {
       headers: { Authorization: `Bearer ${token}` },
-    });
+    }, GRAPH_TIMEOUT_MS, "Graph /users request");
     if (!res.ok) {
       throw new Error(`Graph /users failed: ${res.status} ${await res.text()}`);
     }
@@ -65,22 +68,6 @@ async function fetchAllGraphUsers(token: string): Promise<GraphUser[]> {
     url = data["@odata.nextLink"] ?? null;
   }
   return users;
-}
-
-/** Fetch direct reports for a user from Graph. */
-async function fetchDirectReports(
-  token: string,
-  userId: string
-): Promise<{ id: string }[]> {
-  const url = `${GRAPH_BASE}/users/${userId}/directReports?$select=id`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) {
-    throw new Error(`Graph /users/${userId}/directReports failed: ${res.status} ${await res.text()}`);
-  }
-  const data = (await res.json()) as GraphResponse<{ id: string }>;
-  return data.value;
 }
 
 export type SyncResult = {
@@ -100,7 +87,7 @@ export function isEntraConfigured(): boolean {
 
 /**
  * Full sync: pull all users from Entra, upsert into local User table,
- * then resolve manager relationships from Graph directReports.
+ * then resolve manager relationships from the expanded Graph manager link.
  */
 export async function syncEntraToDb(): Promise<SyncResult> {
   if (!isEntraConfigured()) {
@@ -118,7 +105,7 @@ export async function syncEntraToDb(): Promise<SyncResult> {
   let reportLinksUpdated = 0;
   let directReportFetchFailures = 0;
 
-  // Map Graph id → employeeId for directReports resolution
+  // Map Graph id → employeeId for manager relationship resolution.
   const graphIdToEmployeeId = new Map<string, string>();
   for (const gu of graphUsers) {
     const empId = gu.employeeId || gu.userPrincipalName;
@@ -137,6 +124,8 @@ export async function syncEntraToDb(): Promise<SyncResult> {
           email: gu.mail ?? gu.userPrincipalName,
           upn: gu.userPrincipalName,
           isActive: gu.accountEnabled,
+          isManager: false,
+          managerId: null,
           lastSyncedAt: now,
         },
       });
@@ -157,20 +146,15 @@ export async function syncEntraToDb(): Promise<SyncResult> {
     }
   }
 
-  // 2) Resolve manager relationships via directReports
+  // 2) Resolve manager relationships from each user's expanded manager link.
+  const managerIdsWithReports = new Set<string>();
   for (const gu of graphUsers) {
-    let reports: { id: string }[];
-    try {
-      reports = await fetchDirectReports(token, gu.id);
-    } catch (e) {
-      directReportFetchFailures++;
-      console.warn(`[entra] Failed to fetch direct reports for ${gu.userPrincipalName}: ${e instanceof Error ? e.message : String(e)}`);
-      continue;
-    }
-    if (reports.length === 0) continue;
-    managersWithReports++;
+    const managerGraphId = gu.manager?.id;
+    if (!managerGraphId) continue;
+    const reportEmpId = gu.employeeId || gu.userPrincipalName;
+    const managerEmpId = graphIdToEmployeeId.get(managerGraphId);
+    if (!managerEmpId || managerEmpId === reportEmpId) continue;
 
-    const managerEmpId = gu.employeeId || gu.userPrincipalName;
     const manager = await prisma.user.findUnique({
       where: { employeeId: managerEmpId },
       select: { id: true },
@@ -182,17 +166,15 @@ export async function syncEntraToDb(): Promise<SyncResult> {
       where: { employeeId: managerEmpId },
       data: { isManager: true },
     });
+    managerIdsWithReports.add(managerEmpId);
 
-    for (const report of reports) {
-      const reportEmpId = graphIdToEmployeeId.get(report.id);
-      if (!reportEmpId) continue;
-      const result = await prisma.user.updateMany({
-        where: { employeeId: reportEmpId },
-        data: { managerId: manager.id },
-      });
-      reportLinksUpdated += result.count;
-    }
+    const result = await prisma.user.updateMany({
+      where: { employeeId: reportEmpId },
+      data: { managerId: manager.id },
+    });
+    reportLinksUpdated += result.count;
   }
+  managersWithReports = managerIdsWithReports.size;
 
   const result = { created, updated, deactivated, managersWithReports, reportLinksUpdated, directReportFetchFailures, total: graphUsers.length };
   console.info(`[entra] Sync complete: ${JSON.stringify(result)}.`);

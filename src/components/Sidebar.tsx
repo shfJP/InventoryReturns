@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 const mainNav = [
   { href: "/", label: "Dashboard", icon: DashboardIcon },
@@ -21,6 +21,7 @@ type SyncSource = "entra" | "reftab";
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const isPublic = pathname === "/login" || pathname === "/choose-view";
   const [isAdmin, setIsAdmin] = useState(false);
   const [syncStates, setSyncStates] = useState<Record<SyncSource, SyncState>>({
@@ -48,12 +49,39 @@ export default function Sidebar() {
       .then((data) => {
         if (!data) return;
         setSyncStates({
-          entra: data.entraSyncedAt ? "good" : "unknown",
-          reftab: data.reftabSyncedAt ? "good" : "unknown",
+          entra: statusToSyncState(data.entra?.state, data.entraSyncedAt),
+          reftab: statusToSyncState(data.reftab?.state, data.reftabSyncedAt),
         });
       })
       .catch(() => {});
   }, [isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin || !Object.values(syncStates).includes("syncing")) return;
+
+    const interval = window.setInterval(() => {
+      fetch("/api/admin/sync-status")
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (!data) return;
+          const nextStates = {
+            entra: statusToSyncState(data.entra?.state, data.entraSyncedAt),
+            reftab: statusToSyncState(data.reftab?.state, data.reftabSyncedAt),
+          };
+          const finished =
+            (syncStates.entra === "syncing" && nextStates.entra !== "syncing") ||
+            (syncStates.reftab === "syncing" && nextStates.reftab !== "syncing");
+          setSyncStates(nextStates);
+          if (finished) {
+            router.refresh();
+            window.location.reload();
+          }
+        })
+        .catch(() => {});
+    }, 5_000);
+
+    return () => window.clearInterval(interval);
+  }, [isAdmin, router, syncStates]);
 
   return (
     <aside
@@ -121,12 +149,20 @@ export default function Sidebar() {
                 endpoint="/api/admin/sync-entra"
                 state={syncStates.entra}
                 onStateChange={(state) => setSyncStates((prev) => ({ ...prev, entra: state }))}
+                onComplete={() => {
+                  router.refresh();
+                  window.location.reload();
+                }}
               />
               <SyncButton
                 label="Sync Reftab"
                 endpoint="/api/admin/sync-reftab"
                 state={syncStates.reftab}
                 onStateChange={(state) => setSyncStates((prev) => ({ ...prev, reftab: state }))}
+                onComplete={() => {
+                  router.refresh();
+                  window.location.reload();
+                }}
               />
             </>
           )}
@@ -144,16 +180,25 @@ export default function Sidebar() {
   );
 }
 
+function statusToSyncState(state: string | undefined, fallbackSyncedAt: string | null | undefined): SyncState {
+  if (state === "running") return "syncing";
+  if (state === "error") return "error";
+  if (state === "success") return "good";
+  return fallbackSyncedAt ? "good" : "unknown";
+}
+
 function SyncButton({
   label,
   endpoint,
   state,
   onStateChange,
+  onComplete,
 }: {
   label: string;
   endpoint: string;
   state: SyncState;
   onStateChange: (state: SyncState) => void;
+  onComplete: () => void;
 }) {
   const iconClassName = {
     unknown: "text-[var(--muted)]",
@@ -170,6 +215,7 @@ function SyncButton({
       if (res.ok) {
         onStateChange("good");
         alert(`${label} completed: ${JSON.stringify(data)}`);
+        onComplete();
       } else {
         onStateChange("error");
         alert(`${label} failed: ${data.error ?? "Unknown error"}`);

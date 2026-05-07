@@ -1,5 +1,6 @@
 import { createHash, createHmac } from "crypto";
 import { prisma } from "./db";
+import { fetchWithTimeout } from "./fetch-timeout";
 
 /**
  * Reftab integration — see https://www.reftab.com/api-docs
@@ -17,6 +18,7 @@ const ASSIGNEE_FIELD = (process.env.REF_TAB_ASSIGNEE_FIELD ?? "loanee").trim();
 const ASSET_TAG_FIELD = (process.env.REF_TAB_ASSET_TAG_FIELD ?? "id").trim();
 const SERIAL_FIELD = (process.env.REF_TAB_SERIAL_FIELD ?? "serial").trim();
 const MODEL_FIELD = (process.env.REF_TAB_MODEL_FIELD ?? "title").trim();
+const REF_TAB_TIMEOUT_MS = Math.max(Number(process.env.REF_TAB_REQUEST_TIMEOUT_MS) || 30_000, 5_000);
 
 export type RefTabAssignment = {
   asset_tag: string;
@@ -116,7 +118,12 @@ async function fetchReftabNativeAssets(employeeIds: string[]): Promise<RefTabAss
 
     let res: Response;
     try {
-      res = await fetch(fullUrl, { method: "GET", headers, cache: "no-store" });
+      res = await fetchWithTimeout(
+        fullUrl,
+        { method: "GET", headers, cache: "no-store" },
+        REF_TAB_TIMEOUT_MS,
+        `Reftab assets page ${page}`
+      );
     } catch {
       break;
     }
@@ -188,7 +195,12 @@ async function fetchAllReftabAssets(): Promise<RefTabAssignment[]> {
     const headers = signReftabRequest(fullUrl, "GET");
     let res: Response;
     try {
-      res = await fetch(fullUrl, { method: "GET", headers, cache: "no-store" });
+      res = await fetchWithTimeout(
+        fullUrl,
+        { method: "GET", headers, cache: "no-store" },
+        REF_TAB_TIMEOUT_MS,
+        `Reftab assets page ${page}`
+      );
     } catch (e) {
       console.warn(`[reftab] Page ${page} request failed: ${e instanceof Error ? e.message : String(e)}`);
       break;
@@ -308,7 +320,12 @@ async function fetchRefTabLegacyAssignments(employeeIds: string[]): Promise<RefT
   };
   for (const eid of employeeIds) {
     try {
-      const res = await fetch(`${base}/assignments?employee_id=${encodeURIComponent(eid)}`, { headers });
+      const res = await fetchWithTimeout(
+        `${base}/assignments?employee_id=${encodeURIComponent(eid)}`,
+        { headers },
+        REF_TAB_TIMEOUT_MS,
+        `Reftab assignments for ${eid}`
+      );
       if (!res.ok) continue;
       const data = (await res.json()) as RefTabAssignment[] | { data?: RefTabAssignment[] };
       const list = Array.isArray(data) ? data : data.data ?? [];
