@@ -19,6 +19,7 @@ const ASSET_TAG_FIELD = (process.env.REF_TAB_ASSET_TAG_FIELD ?? "id").trim();
 const SERIAL_FIELD = (process.env.REF_TAB_SERIAL_FIELD ?? "serial").trim();
 const MODEL_FIELD = (process.env.REF_TAB_MODEL_FIELD ?? "title").trim();
 const REF_TAB_TIMEOUT_MS = Math.max(Number(process.env.REF_TAB_REQUEST_TIMEOUT_MS) || 30_000, 5_000);
+const REF_TAB_SYNC_SOURCE = (process.env.REF_TAB_SYNC_SOURCE ?? "assets").trim().toLowerCase();
 
 export type RefTabAssignment = {
   asset_tag: string;
@@ -26,6 +27,12 @@ export type RefTabAssignment = {
   model?: string;
   assigned_to_employee_id: string;
   status?: string;
+};
+
+type ReftabLoanee = {
+  email?: string;
+  uid?: string | number;
+  lnid?: string | number;
 };
 
 /** Sign a Reftab API request (same rules as official ReftabNode). */
@@ -81,6 +88,56 @@ function stringifyField(asset: Record<string, unknown>, path: string): string | 
   return undefined;
 }
 
+function valueToString(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value === "string") return value.trim() || undefined;
+  if (typeof value === "number") return String(value);
+  return undefined;
+}
+
+function firstString(obj: Record<string, unknown>, paths: string[]): string | undefined {
+  for (const path of paths) {
+    const value = valueToString(getNested(obj, path));
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function listFromResponse(data: unknown): Record<string, unknown>[] {
+  if (Array.isArray(data)) {
+    if (data.length > 0 && Array.isArray(data[0])) {
+      return (data[0] as unknown[]).filter((item): item is Record<string, unknown> => item != null && typeof item === "object" && !Array.isArray(item));
+    }
+    return data.filter((item): item is Record<string, unknown> => item != null && typeof item === "object" && !Array.isArray(item));
+  }
+  if (data != null && typeof data === "object") {
+    const record = data as Record<string, unknown>;
+    for (const key of ["data", "items", "results", "loans", "assets", "loanees"]) {
+      const value = record[key];
+      if (Array.isArray(value)) {
+        return value.filter((item): item is Record<string, unknown> => item != null && typeof item === "object" && !Array.isArray(item));
+      }
+    }
+  }
+  return [];
+}
+
+async function fetchReftabJson(endpoint: string, label: string): Promise<unknown> {
+  const cleanEndpoint = endpoint.startsWith("/") ? endpoint.slice(1) : endpoint;
+  const fullUrl = `${REF_TAB_URL}/${cleanEndpoint}`;
+  const headers = signReftabRequest(fullUrl, "GET");
+  const res = await fetchWithTimeout(
+    fullUrl,
+    { method: "GET", headers, cache: "no-store" },
+    REF_TAB_TIMEOUT_MS,
+    label
+  );
+  if (!res.ok) {
+    throw new Error(`${label} returned ${res.status}: ${await res.text()}`);
+  }
+  return res.json();
+}
+
 function idSetHas(idSet: Set<string>, match: string): boolean {
   if (idSet.has(match)) return true;
   const lower = match.toLowerCase();
@@ -110,6 +167,134 @@ function resolveAssigneeEmployeeId(rawAssignee: string, aliases: Map<string, str
   return aliases.get(normalizeKey(rawAssignee) ?? "") ?? null;
 }
 
+function addLoaneeAlias(map: Map<string, string>, id: unknown, email: string | undefined): void {
+  const idKey = valueToString(id);
+  const emailKey = normalizeKey(email);
+  if (idKey && emailKey) map.set(idKey, emailKey);
+}
+
+function buildLoaneeMaps(loanees: ReftabLoanee[]): { lnidToEmail: Map<string, string>; uidToEmail: Map<string, string> } {
+  const lnidToEmail = new Map<string, string>();
+  const uidToEmail = new Map<string, string>();
+  for (const loanee of loanees) {
+    addLoaneeAlias(lnidToEmail, loanee.lnid, loanee.email);
+    addLoaneeAlias(uidToEmail, loanee.uid, loanee.email);
+  }
+  return { lnidToEmail, uidToEmail };
+}
+
+async function fetchAllReftabLoanees(): Promise<ReftabLoanee[]> {
+  const limit = 500;
+  let offset = 0;
+  const out: ReftabLoanee[] = [];
+
+  while (offset < 50_000) {
+    const data = await fetchReftabJson(`loanees?limit=${limit}&offset=${offset}`, `Reftab loanees offset ${offset}`);
+    const list = listFromResponse(data);
+    if (list.length === 0) break;
+    for (const item of list) {
+      out.push({
+        email: firstString(item, ["email", "mail", "user.email", "loanee.email"]),
+        uid: firstString(item, ["uid", "id", "user.uid"]),
+        lnid: firstString(item, ["lnid", "loaneeId", "loanee.lnid"]),
+      });
+    }
+    if (list.length < limit) break;
+    offset += limit;
+  }
+
+  console.info(`[reftab] Fetched ${out.length} loanee/user record(s).`);
+  return out;
+}
+
+function getLoanAssignee(loan: Record<string, unknown>, loaneeMaps: { lnidToEmail: Map<string, string>; uidToEmail: Map<string, string> }): string | undefined {
+  const directEmail = firstString(loan, [
+    "loanee.email",
+    "loaneeEmail",
+    "loanee_email",
+    "email",
+    "user.email",
+  ]);
+  if (directEmail) return directEmail;
+
+  const lnid = firstString(loan, ["lnid", "loanee.lnid"]);
+  if (lnid && loaneeMaps.lnidToEmail.has(lnid)) return loaneeMaps.lnidToEmail.get(lnid);
+
+  const loanUid = firstString(loan, ["loan_uid", "uid", "user.uid"]);
+  if (loanUid && loaneeMaps.uidToEmail.has(loanUid)) return loaneeMaps.uidToEmail.get(loanUid);
+
+  return firstString(loan, ["loanee", "assigned_to", "assignedTo", "borrower"]);
+}
+
+function resolveReftabAssigneeFromRecord(record: Record<string, unknown>, loaneeMaps: { lnidToEmail: Map<string, string>; uidToEmail: Map<string, string> }): string | undefined {
+  const directValues = [
+    assigneeToMatchString(getNested(record, ASSIGNEE_FIELD)),
+    firstString(record, [
+      "loanee.email",
+      "loaneeEmail",
+      "loanee_email",
+      "checkedOutTo.email",
+      "loan.loanee.email",
+      "loan.email",
+    ]),
+  ].filter((value): value is string => Boolean(value));
+
+  for (const value of directValues) {
+    const normalized = normalizeKey(value);
+    if (!normalized) continue;
+    if (loaneeMaps.lnidToEmail.has(value)) return loaneeMaps.lnidToEmail.get(value);
+    if (loaneeMaps.uidToEmail.has(value)) return loaneeMaps.uidToEmail.get(value);
+    return value;
+  }
+
+  const lnid = firstString(record, ["lnid", "loanee.lnid", "loan.lnid"]);
+  if (lnid && loaneeMaps.lnidToEmail.has(lnid)) return loaneeMaps.lnidToEmail.get(lnid);
+
+  const loanUid = firstString(record, ["loan_uid", "uid", "loanee.uid", "loan.loan_uid", "loan.uid"]);
+  if (loanUid && loaneeMaps.uidToEmail.has(loanUid)) return loaneeMaps.uidToEmail.get(loanUid);
+
+  return undefined;
+}
+
+function pushLoanAsset(out: RefTabAssignment[], asset: Record<string, unknown>, fallbackAssignee: string): void {
+  const tag = firstString(asset, ["aid", "assetId", "asset_id", "assetTag", "asset_tag", "id", "asset.id"]);
+  if (!tag) return;
+  out.push({
+    asset_tag: tag,
+    serial: firstString(asset, ["serial", "serialNumber", "asset.serial"]),
+    model: firstString(asset, ["title", "model", "name", "asset.title", "asset.model"]),
+    assigned_to_employee_id: fallbackAssignee,
+    status: "out",
+  });
+}
+
+function assignmentsFromLoan(loan: Record<string, unknown>, assignee: string): RefTabAssignment[] {
+  const out: RefTabAssignment[] = [];
+  for (const key of ["assets", "items"]) {
+    const value = loan[key];
+    if (!Array.isArray(value)) continue;
+    for (const item of value) {
+      if (item != null && typeof item === "object" && !Array.isArray(item)) {
+        pushLoanAsset(out, item as Record<string, unknown>, assignee);
+      } else {
+        const tag = valueToString(item);
+        if (tag) out.push({ asset_tag: tag, assigned_to_employee_id: assignee, status: "out" });
+      }
+    }
+  }
+
+  const aids = loan.aids;
+  if (Array.isArray(aids)) {
+    for (const aid of aids) {
+      const tag = valueToString(aid);
+      if (tag) out.push({ asset_tag: tag, assigned_to_employee_id: assignee, status: "out" });
+    }
+  }
+
+  if (out.length === 0) pushLoanAsset(out, loan, assignee);
+  return out;
+}
+
 /**
  * Fetch equipment for the given employee IDs from Reftab.
  * Uses GET /assets (see Reftab API docs), then filters by REF_TAB_ASSIGNEE_FIELD (dot-path supported).
@@ -132,11 +317,11 @@ async function fetchReftabNativeAssets(employeeIds: string[]): Promise<RefTabAss
   const idSet = new Set(employeeIds.map((s) => s.trim()).filter(Boolean));
   const limit = ASSETS_LIMIT;
   const allAssets: Record<string, unknown>[] = [];
-  let page = 1;
-  const maxPages = 50; // Safety limit
+  let offset = 0;
+  const loaneeMaps = buildLoaneeMaps(await fetchAllReftabLoanees());
 
-  while (page <= maxPages) {
-    const fullUrl = `${REF_TAB_URL}/assets?limit=${limit}&page=${page}`;
+  while (offset < 500_000) {
+    const fullUrl = `${REF_TAB_URL}/assets?limit=${limit}&offset=${offset}&loan=out`;
     const headers = signReftabRequest(fullUrl, "GET");
 
     let res: Response;
@@ -145,7 +330,7 @@ async function fetchReftabNativeAssets(employeeIds: string[]): Promise<RefTabAss
         fullUrl,
         { method: "GET", headers, cache: "no-store" },
         REF_TAB_TIMEOUT_MS,
-        `Reftab assets page ${page}`
+        `Reftab checked-out assets offset ${offset}`
       );
     } catch {
       break;
@@ -159,24 +344,19 @@ async function fetchReftabNativeAssets(employeeIds: string[]): Promise<RefTabAss
       break;
     }
 
-    const list: Record<string, unknown>[] = Array.isArray(data)
-      ? (data as Record<string, unknown>[])
-      : (data as { data?: unknown }).data != null && Array.isArray((data as { data: unknown }).data)
-        ? ((data as { data: Record<string, unknown>[] }).data)
-        : [];
+    const list = listFromResponse(data);
 
     if (list.length === 0) break;
     allAssets.push(...list);
 
     // If we received fewer than the limit, we've reached the last page
     if (list.length < limit) break;
-    page++;
+    offset += limit;
   }
 
   const out: RefTabAssignment[] = [];
   for (const asset of allAssets) {
-    const assigneeRaw = getNested(asset, ASSIGNEE_FIELD);
-    const match = assigneeToMatchString(assigneeRaw);
+    const match = resolveReftabAssigneeFromRecord(asset, loaneeMaps);
     if (!match || !idSetHas(idSet, match)) continue;
 
     const tag =
@@ -200,6 +380,55 @@ async function fetchReftabNativeAssets(employeeIds: string[]): Promise<RefTabAss
   return out;
 }
 
+/** Fetch current checked-out loans from Reftab and map them to asset+loanee assignments. */
+async function fetchAllReftabLoans(): Promise<RefTabAssignment[]> {
+  if (!REF_TAB_PUBLIC || !REF_TAB_SECRET) {
+    console.warn("[reftab] Loan sync skipped: REF_TAB_API_PUBLIC_KEY or REF_TAB_API_SECRET_KEY is not configured.");
+    return [];
+  }
+
+  const limit = ASSETS_LIMIT;
+  let offset = 0;
+  const allLoans: Record<string, unknown>[] = [];
+  const loanees = await fetchAllReftabLoanees();
+  const loaneeMaps = buildLoaneeMaps(loanees);
+
+  console.info(`[reftab] Starting checked-out loan fetch from ${REF_TAB_URL}/loans with limit=${limit}.`);
+
+  while (offset < 500_000) {
+    const query = `loans?limit=${limit}&offset=${offset}&status=out`;
+    let list: Record<string, unknown>[];
+    try {
+      list = listFromResponse(await fetchReftabJson(query, `Reftab loans offset ${offset}`));
+    } catch (e) {
+      console.warn(`[reftab] Loan request offset ${offset} failed: ${e instanceof Error ? e.message : String(e)}`);
+      break;
+    }
+    console.info(`[reftab] Loan offset ${offset} returned ${list.length} loan(s).`);
+    if (list.length === 0) break;
+    allLoans.push(...list);
+    if (list.length < limit) break;
+    offset += limit;
+  }
+
+  let skippedMissingAssignee = 0;
+  let skippedMissingAsset = 0;
+  const out: RefTabAssignment[] = [];
+  for (const loan of allLoans) {
+    const assignee = getLoanAssignee(loan, loaneeMaps);
+    if (!assignee) {
+      skippedMissingAssignee++;
+      continue;
+    }
+    const before = out.length;
+    out.push(...assignmentsFromLoan(loan, assignee));
+    if (out.length === before) skippedMissingAsset++;
+  }
+
+  console.info(`[reftab] Fetched ${allLoans.length} loan(s); mapped ${out.length} checked-out asset assignment(s); skippedMissingAssignee=${skippedMissingAssignee}; skippedMissingAsset=${skippedMissingAsset}.`);
+  return out;
+}
+
 /** Fetch ALL assets from Reftab (no employee filter) with full pagination. */
 async function fetchAllReftabAssets(): Promise<RefTabAssignment[]> {
   if (!REF_TAB_PUBLIC || !REF_TAB_SECRET) {
@@ -208,13 +437,13 @@ async function fetchAllReftabAssets(): Promise<RefTabAssignment[]> {
   }
   const limit = ASSETS_LIMIT;
   const allAssets: Record<string, unknown>[] = [];
-  let page = 1;
-  const maxPages = 100;
+  let offset = 0;
+  const loaneeMaps = buildLoaneeMaps(await fetchAllReftabLoanees());
 
-  console.info(`[reftab] Starting asset fetch from ${REF_TAB_URL}/assets with limit=${limit}.`);
+  console.info(`[reftab] Starting checked-out asset fetch from ${REF_TAB_URL}/assets with limit=${limit}.`);
 
-  while (page <= maxPages) {
-    const fullUrl = `${REF_TAB_URL}/assets?limit=${limit}&page=${page}`;
+  while (offset < 500_000) {
+    const fullUrl = `${REF_TAB_URL}/assets?limit=${limit}&offset=${offset}&loan=out`;
     const headers = signReftabRequest(fullUrl, "GET");
     let res: Response;
     try {
@@ -222,40 +451,39 @@ async function fetchAllReftabAssets(): Promise<RefTabAssignment[]> {
         fullUrl,
         { method: "GET", headers, cache: "no-store" },
         REF_TAB_TIMEOUT_MS,
-        `Reftab assets page ${page}`
+        `Reftab checked-out assets offset ${offset}`
       );
     } catch (e) {
-      console.warn(`[reftab] Page ${page} request failed: ${e instanceof Error ? e.message : String(e)}`);
+      console.warn(`[reftab] Asset offset ${offset} request failed: ${e instanceof Error ? e.message : String(e)}`);
       break;
     }
     if (!res.ok) {
-      console.warn(`[reftab] Page ${page} returned ${res.status}: ${await res.text()}`);
+      console.warn(`[reftab] Asset offset ${offset} returned ${res.status}: ${await res.text()}`);
       break;
     }
     let data: unknown;
     try {
       data = await res.json();
     } catch (e) {
-      console.warn(`[reftab] Page ${page} JSON parse failed: ${e instanceof Error ? e.message : String(e)}`);
+      console.warn(`[reftab] Asset offset ${offset} JSON parse failed: ${e instanceof Error ? e.message : String(e)}`);
       break;
     }
-    const list: Record<string, unknown>[] = Array.isArray(data)
-      ? (data as Record<string, unknown>[])
-      : (data as { data?: unknown }).data != null && Array.isArray((data as { data: unknown }).data)
-        ? ((data as { data: Record<string, unknown>[] }).data)
-        : [];
-    console.info(`[reftab] Page ${page} returned ${list.length} asset(s).`);
+    const list = listFromResponse(data);
+    console.info(`[reftab] Asset offset ${offset} returned ${list.length} checked-out asset(s).`);
     if (list.length === 0) break;
     allAssets.push(...list);
     if (list.length < limit) break;
-    page++;
+    offset += limit;
   }
 
+  let skippedMissingAssignee = 0;
   const out: RefTabAssignment[] = [];
   for (const asset of allAssets) {
-    const assigneeRaw = getNested(asset, ASSIGNEE_FIELD);
-    const match = assigneeToMatchString(assigneeRaw);
-    if (!match) continue;
+    const match = resolveReftabAssigneeFromRecord(asset, loaneeMaps);
+    if (!match) {
+      skippedMissingAssignee++;
+      continue;
+    }
 
     const tag =
       stringifyField(asset, ASSET_TAG_FIELD) ??
@@ -271,7 +499,7 @@ async function fetchAllReftabAssets(): Promise<RefTabAssignment[]> {
       status: stringifyField(asset, "status") ?? undefined,
     });
   }
-  console.info(`[reftab] Fetched ${allAssets.length} raw asset(s); ${out.length} had a usable assignee and asset tag.`);
+  console.info(`[reftab] Fetched ${allAssets.length} checked-out asset(s); ${out.length} had a usable asset tag and loanee; skippedMissingAssignee=${skippedMissingAssignee}.`);
   return out;
 }
 
@@ -287,7 +515,11 @@ export type ReftabSyncResult = {
  * Cross-references CollectionEvent to skip items already collected.
  */
 export async function syncReftabToDb(): Promise<ReftabSyncResult> {
-  const assets = await fetchAllReftabAssets();
+  let assets = REF_TAB_SYNC_SOURCE === "loans" ? await fetchAllReftabLoans() : await fetchAllReftabAssets();
+  if (assets.length === 0 && REF_TAB_SYNC_SOURCE !== "loans") {
+    console.warn("[reftab] Asset sync produced zero mapped assignments; falling back to /loans for compatibility.");
+    assets = await fetchAllReftabLoans();
+  }
   console.info(`[reftab] Starting database sync for ${assets.length} mapped asset(s).`);
   const now = new Date();
   const userAliases = await buildUserAliasMap();
