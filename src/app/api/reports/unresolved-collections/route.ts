@@ -39,6 +39,7 @@ export async function GET(req: NextRequest) {
       assetTag: entry.assetTag,
       serial: entry.serial,
       model: entry.model,
+      source: entry.source,
       detectedAt: entry.detectedAt.toISOString(),
       status: entry.status,
     }))

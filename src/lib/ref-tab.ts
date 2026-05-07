@@ -32,6 +32,9 @@ export type RefTabAssignment = {
   statusName?: string;
   details?: Record<string, string>;
   assigned_to_employee_id: string;
+  managerEmployeeId?: string;
+  managerName?: string;
+  managerEmail?: string;
   status?: string;
 };
 
@@ -39,6 +42,22 @@ type ReftabLoanee = {
   email?: string;
   uid?: string | number;
   lnid?: string | number;
+  managerEmployeeId?: string;
+  managerName?: string;
+  managerEmail?: string;
+};
+
+type LoaneeMaps = {
+  lnidToEmail: Map<string, string>;
+  uidToEmail: Map<string, string>;
+  lnidToLoanee: Map<string, ReftabLoanee>;
+  uidToLoanee: Map<string, ReftabLoanee>;
+};
+
+type ReftabManagerInfo = {
+  managerEmployeeId?: string;
+  managerName?: string;
+  managerEmail?: string;
 };
 
 /** Sign a Reftab API request (same rules as official ReftabNode). */
@@ -107,6 +126,78 @@ function firstString(obj: Record<string, unknown>, paths: string[]): string | un
     if (value) return value;
   }
   return undefined;
+}
+
+function managerInfoFromRecord(record: Record<string, unknown>): ReftabManagerInfo {
+  return {
+    managerEmployeeId: firstString(record, [
+      "managerEmployeeId",
+      "manager.employeeId",
+      "manager.uid",
+      "manager.id",
+      "managerUpn",
+      "manager.upn",
+      "assignedManager.employeeId",
+      "assignedManager.uid",
+      "assignedManager.id",
+      "supervisor.employeeId",
+      "supervisor.uid",
+      "supervisor.id",
+      "boss.employeeId",
+      "boss.uid",
+      "boss.id",
+      "user.manager.employeeId",
+      "user.manager.uid",
+      "loanee.manager.employeeId",
+      "loanee.manager.uid",
+    ]),
+    managerName: firstString(record, [
+      "managerName",
+      "manager.name",
+      "manager.displayName",
+      "manager.fullName",
+      "manager",
+      "assignedManager.name",
+      "assignedManager.displayName",
+      "supervisor.name",
+      "supervisor.displayName",
+      "boss.name",
+      "boss.displayName",
+      "user.manager.name",
+      "user.manager.displayName",
+      "loanee.manager.name",
+      "loanee.manager.displayName",
+    ]),
+    managerEmail: firstString(record, [
+      "managerEmail",
+      "manager.email",
+      "manager.mail",
+      "manager.userPrincipalName",
+      "manager.upn",
+      "assignedManager.email",
+      "assignedManager.mail",
+      "assignedManager.upn",
+      "supervisor.email",
+      "supervisor.mail",
+      "boss.email",
+      "boss.mail",
+      "user.manager.email",
+      "user.manager.mail",
+      "loanee.manager.email",
+      "loanee.manager.mail",
+    ]),
+  };
+}
+
+function combineManagerInfo(...infos: Array<ReftabManagerInfo | undefined>): ReftabManagerInfo {
+  const out: ReftabManagerInfo = {};
+  for (const info of infos) {
+    if (!info) continue;
+    out.managerEmployeeId ??= info.managerEmployeeId;
+    out.managerName ??= info.managerName;
+    out.managerEmail ??= info.managerEmail;
+  }
+  return out;
 }
 
 function likelyCategoryFromFields(record: Record<string, unknown>): string | undefined {
@@ -261,20 +352,73 @@ function resolveAssigneeEmployeeId(rawAssignee: string, aliases: Map<string, str
   return aliases.get(normalizeKey(rawAssignee) ?? "") ?? null;
 }
 
+async function logUnmatchedReftabAssignment(asset: RefTabAssignment, aliases: Map<string, string>): Promise<void> {
+  const rawAssignee = asset.assigned_to_employee_id.trim();
+  const employeeId = rawAssignee || `unmatched:${asset.asset_tag}`;
+  const employeeEmail = rawAssignee.includes("@") ? rawAssignee : null;
+  const managerEmployeeId =
+    resolveAssigneeEmployeeId(asset.managerEmployeeId ?? "", aliases) ??
+    resolveAssigneeEmployeeId(asset.managerEmail ?? "", aliases) ??
+    asset.managerEmployeeId ??
+    asset.managerEmail ??
+    null;
+  await prisma.unresolvedCollection.upsert({
+    where: {
+      employeeId_assetTag_status: {
+        employeeId,
+        assetTag: asset.asset_tag,
+        status: "UNRESOLVED",
+      },
+    },
+    update: {
+      employeeName: rawAssignee || "Unknown Reftab assignee",
+      employeeEmail,
+      assetTag: asset.asset_tag,
+      serial: asset.serial ?? null,
+      model: asset.title ?? asset.model ?? null,
+      managerEmployeeId,
+      managerName: asset.managerName ?? null,
+      managerEmail: asset.managerEmail ?? null,
+      source: "reftab_unmatched_assignee",
+    },
+    create: {
+      employeeId,
+      employeeName: rawAssignee || "Unknown Reftab assignee",
+      employeeEmail,
+      assetTag: asset.asset_tag,
+      serial: asset.serial ?? null,
+      model: asset.title ?? asset.model ?? null,
+      managerEmployeeId,
+      managerName: asset.managerName ?? null,
+      managerEmail: asset.managerEmail ?? null,
+      source: "reftab_unmatched_assignee",
+    },
+  });
+}
+
 function addLoaneeAlias(map: Map<string, string>, id: unknown, email: string | undefined): void {
   const idKey = valueToString(id);
   const emailKey = normalizeKey(email);
   if (idKey && emailKey) map.set(idKey, emailKey);
 }
 
-function buildLoaneeMaps(loanees: ReftabLoanee[]): { lnidToEmail: Map<string, string>; uidToEmail: Map<string, string> } {
+function addLoaneeRecord(map: Map<string, ReftabLoanee>, id: unknown, loanee: ReftabLoanee): void {
+  const idKey = valueToString(id);
+  if (idKey) map.set(idKey, loanee);
+}
+
+function buildLoaneeMaps(loanees: ReftabLoanee[]): LoaneeMaps {
   const lnidToEmail = new Map<string, string>();
   const uidToEmail = new Map<string, string>();
+  const lnidToLoanee = new Map<string, ReftabLoanee>();
+  const uidToLoanee = new Map<string, ReftabLoanee>();
   for (const loanee of loanees) {
     addLoaneeAlias(lnidToEmail, loanee.lnid, loanee.email);
     addLoaneeAlias(uidToEmail, loanee.uid, loanee.email);
+    addLoaneeRecord(lnidToLoanee, loanee.lnid, loanee);
+    addLoaneeRecord(uidToLoanee, loanee.uid, loanee);
   }
-  return { lnidToEmail, uidToEmail };
+  return { lnidToEmail, uidToEmail, lnidToLoanee, uidToLoanee };
 }
 
 async function fetchAllReftabLoanees(): Promise<ReftabLoanee[]> {
@@ -291,6 +435,7 @@ async function fetchAllReftabLoanees(): Promise<ReftabLoanee[]> {
         email: firstString(item, ["email", "mail", "user.email", "loanee.email"]),
         uid: firstString(item, ["uid", "id", "user.uid"]),
         lnid: firstString(item, ["lnid", "loaneeId", "loanee.lnid"]),
+        ...managerInfoFromRecord(item),
       });
     }
     if (list.length < limit) break;
@@ -301,7 +446,7 @@ async function fetchAllReftabLoanees(): Promise<ReftabLoanee[]> {
   return out;
 }
 
-function getLoanAssignee(loan: Record<string, unknown>, loaneeMaps: { lnidToEmail: Map<string, string>; uidToEmail: Map<string, string> }): string | undefined {
+function getLoanAssignee(loan: Record<string, unknown>, loaneeMaps: LoaneeMaps): string | undefined {
   const directEmail = firstString(loan, [
     "loanee.email",
     "loaneeEmail",
@@ -320,7 +465,7 @@ function getLoanAssignee(loan: Record<string, unknown>, loaneeMaps: { lnidToEmai
   return firstString(loan, ["loanee", "assigned_to", "assignedTo", "borrower"]);
 }
 
-function resolveReftabAssigneeFromRecord(record: Record<string, unknown>, loaneeMaps: { lnidToEmail: Map<string, string>; uidToEmail: Map<string, string> }): string | undefined {
+function resolveReftabAssigneeFromRecord(record: Record<string, unknown>, loaneeMaps: LoaneeMaps): string | undefined {
   const directValues = [
     assigneeToMatchString(getNested(record, ASSIGNEE_FIELD)),
     firstString(record, [
@@ -350,7 +495,34 @@ function resolveReftabAssigneeFromRecord(record: Record<string, unknown>, loanee
   return undefined;
 }
 
-function pushLoanAsset(out: RefTabAssignment[], asset: Record<string, unknown>, fallbackAssignee: string): void {
+function loaneeFromRecord(record: Record<string, unknown>, loaneeMaps: LoaneeMaps): ReftabLoanee | undefined {
+  for (const lnid of [
+    firstString(record, ["lnid", "loanee.lnid", "loan.lnid"]),
+    assigneeToMatchString(getNested(record, ASSIGNEE_FIELD)),
+  ]) {
+    if (lnid && loaneeMaps.lnidToLoanee.has(lnid)) return loaneeMaps.lnidToLoanee.get(lnid);
+  }
+
+  for (const uid of [
+    firstString(record, ["loan_uid", "uid", "loanee.uid", "loan.loan_uid", "loan.uid"]),
+    assigneeToMatchString(getNested(record, ASSIGNEE_FIELD)),
+  ]) {
+    if (uid && loaneeMaps.uidToLoanee.has(uid)) return loaneeMaps.uidToLoanee.get(uid);
+  }
+
+  return undefined;
+}
+
+function managerInfoFromLoanee(loanee: ReftabLoanee | undefined): ReftabManagerInfo {
+  if (!loanee) return {};
+  return {
+    managerEmployeeId: loanee.managerEmployeeId,
+    managerName: loanee.managerName,
+    managerEmail: loanee.managerEmail,
+  };
+}
+
+function pushLoanAsset(out: RefTabAssignment[], asset: Record<string, unknown>, fallbackAssignee: string, managerInfo: ReftabManagerInfo = {}): void {
   const details = assetDetails(asset);
   const tag = details.assetTag;
   if (!tag) return;
@@ -365,21 +537,22 @@ function pushLoanAsset(out: RefTabAssignment[], asset: Record<string, unknown>, 
     statusName: details.statusName,
     details: details.details,
     assigned_to_employee_id: fallbackAssignee,
+    ...combineManagerInfo(managerInfo, managerInfoFromRecord(asset)),
     status: "out",
   });
 }
 
-function assignmentsFromLoan(loan: Record<string, unknown>, assignee: string): RefTabAssignment[] {
+function assignmentsFromLoan(loan: Record<string, unknown>, assignee: string, managerInfo: ReftabManagerInfo): RefTabAssignment[] {
   const out: RefTabAssignment[] = [];
   for (const key of ["assets", "items"]) {
     const value = loan[key];
     if (!Array.isArray(value)) continue;
     for (const item of value) {
       if (item != null && typeof item === "object" && !Array.isArray(item)) {
-        pushLoanAsset(out, item as Record<string, unknown>, assignee);
+        pushLoanAsset(out, item as Record<string, unknown>, assignee, managerInfo);
       } else {
         const tag = valueToString(item);
-        if (tag) out.push({ asset_tag: tag, aid: tag, assigned_to_employee_id: assignee, status: "out" });
+        if (tag) out.push({ asset_tag: tag, aid: tag, assigned_to_employee_id: assignee, ...managerInfo, status: "out" });
       }
     }
   }
@@ -388,11 +561,11 @@ function assignmentsFromLoan(loan: Record<string, unknown>, assignee: string): R
   if (Array.isArray(aids)) {
     for (const aid of aids) {
       const tag = valueToString(aid);
-      if (tag) out.push({ asset_tag: tag, aid: tag, assigned_to_employee_id: assignee, status: "out" });
+      if (tag) out.push({ asset_tag: tag, aid: tag, assigned_to_employee_id: assignee, ...managerInfo, status: "out" });
     }
   }
 
-  if (out.length === 0) pushLoanAsset(out, loan, assignee);
+  if (out.length === 0) pushLoanAsset(out, loan, assignee, managerInfo);
   return out;
 }
 
@@ -459,6 +632,10 @@ async function fetchReftabNativeAssets(employeeIds: string[]): Promise<RefTabAss
   for (const asset of allAssets) {
     const match = resolveReftabAssigneeFromRecord(asset, loaneeMaps);
     if (!match || !idSetHas(idSet, match)) continue;
+    const managerInfo = combineManagerInfo(
+      managerInfoFromLoanee(loaneeFromRecord(asset, loaneeMaps)),
+      managerInfoFromRecord(asset)
+    );
 
     const details = assetDetails(asset);
     const tag =
@@ -478,6 +655,7 @@ async function fetchReftabNativeAssets(employeeIds: string[]): Promise<RefTabAss
       statusName: details.statusName,
       details: details.details,
       assigned_to_employee_id: match,
+      ...managerInfo,
       status: details.statusName,
     });
   }
@@ -524,8 +702,12 @@ async function fetchAllReftabLoans(): Promise<RefTabAssignment[]> {
       skippedMissingAssignee++;
       continue;
     }
+    const managerInfo = combineManagerInfo(
+      managerInfoFromLoanee(loaneeFromRecord(loan, loaneeMaps)),
+      managerInfoFromRecord(loan)
+    );
     const before = out.length;
-    out.push(...assignmentsFromLoan(loan, assignee));
+    out.push(...assignmentsFromLoan(loan, assignee, managerInfo));
     if (out.length === before) skippedMissingAsset++;
   }
 
@@ -588,6 +770,10 @@ async function fetchAllReftabAssets(): Promise<RefTabAssignment[]> {
       skippedMissingAssignee++;
       continue;
     }
+    const managerInfo = combineManagerInfo(
+      managerInfoFromLoanee(loaneeFromRecord(asset, loaneeMaps)),
+      managerInfoFromRecord(asset)
+    );
 
     const details = assetDetails(asset);
     const tag =
@@ -607,6 +793,7 @@ async function fetchAllReftabAssets(): Promise<RefTabAssignment[]> {
       statusName: details.statusName,
       details: details.details,
       assigned_to_employee_id: match,
+      ...managerInfo,
       status: details.statusName,
     });
   }
@@ -651,6 +838,7 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
     const resolvedEmployeeId = resolveAssigneeEmployeeId(asset.assigned_to_employee_id, userAliases);
     if (!resolvedEmployeeId) {
       skippedUnmatchedAssignee++;
+      await logUnmatchedReftabAssignment(asset, userAliases);
       console.warn(`[reftab] Skipping asset ${asset.asset_tag}: assignee "${asset.assigned_to_employee_id}" does not match any local user employeeId, email, or UPN.`);
       continue;
     }

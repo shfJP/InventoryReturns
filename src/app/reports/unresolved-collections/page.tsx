@@ -16,6 +16,7 @@ type UnresolvedCollection = {
   assetTag: string;
   serial: string | null;
   model: string | null;
+  source: string;
   detectedAt: string;
   status: string;
 };
@@ -53,7 +54,7 @@ export default function UnresolvedCollectionsPage() {
 
       <div>
         <h1 className="text-2xl font-bold text-[var(--text)]">Unresolved Collections</h1>
-        <p className="text-[var(--muted)]">Terminated employees with equipment still assigned and not collected.</p>
+        <p className="text-[var(--muted)]">Terminated employees or Reftab assignments that do not map cleanly to Entra users.</p>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
@@ -91,6 +92,11 @@ export default function UnresolvedCollectionsPage() {
                   <td className="table-cell">
                     <div className="font-medium text-[var(--text)]">{item.employeeName}</div>
                     <div className="text-xs text-[var(--muted)]">{item.employeeEmail ?? item.employeeId}</div>
+                    {item.source === "reftab_unmatched_assignee" && (
+                      <span className="mt-1 inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                        Reftab unmatched
+                      </span>
+                    )}
                   </td>
                   <td className="table-cell">
                     <div className="font-medium text-[var(--text)]">{item.managerName ?? "Unknown"}</div>
