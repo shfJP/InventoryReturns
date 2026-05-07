@@ -156,11 +156,8 @@ export async function syncEntraToDb(): Promise<SyncResult> {
 
   // 2) Users that disappear from Entra are treated as terminated. Preserve their
   // manager relationship, mark them inactive, and log any still-assigned items.
-  const missingUsers = await prisma.user.findMany({
-    where: {
-      isActive: true,
-      employeeId: { notIn: Array.from(syncedEmployeeIds) },
-    },
+  const activeLocalUsers = await prisma.user.findMany({
+    where: { isActive: true },
     select: {
       id: true,
       employeeId: true,
@@ -176,6 +173,7 @@ export async function syncEntraToDb(): Promise<SyncResult> {
       },
     },
   });
+  const missingUsers = activeLocalUsers.filter((user) => !syncedEmployeeIds.has(user.employeeId));
 
   for (const user of missingUsers) {
     const assignedItems = await prisma.equipmentAssignment.findMany({
