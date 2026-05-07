@@ -24,6 +24,13 @@ export PORT="${PORT:-3000}"
 export HOSTNAME="${HOSTNAME:-0.0.0.0}"
 
 if [ -f ".next/standalone/server.js" ]; then
+  mkdir -p .next/standalone/.next
+  if [ -d ".next/static" ] && [ ! -d ".next/standalone/.next/static" ]; then
+    cp -R .next/static .next/standalone/.next/static
+  fi
+  if [ -d "public" ] && [ ! -d ".next/standalone/public" ]; then
+    cp -R public .next/standalone/public
+  fi
   exec node .next/standalone/server.js
 fi
 
