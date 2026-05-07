@@ -16,10 +16,17 @@ const reportNav = [
   { href: "/reports/it-collections", label: "IT Collections" },
 ];
 
+type SyncState = "unknown" | "good" | "syncing" | "error";
+type SyncSource = "entra" | "reftab";
+
 export default function Sidebar() {
   const pathname = usePathname();
   const isPublic = pathname === "/login" || pathname === "/choose-view";
   const [isAdmin, setIsAdmin] = useState(false);
+  const [syncStates, setSyncStates] = useState<Record<SyncSource, SyncState>>({
+    entra: "unknown",
+    reftab: "unknown",
+  });
 
   useEffect(() => {
     if (isPublic) {
@@ -32,6 +39,21 @@ export default function Sidebar() {
       .then((data) => setIsAdmin(Boolean(data?.isAdmin)))
       .catch(() => setIsAdmin(false));
   }, [isPublic]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    fetch("/api/admin/sync-status")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data) return;
+        setSyncStates({
+          entra: data.entraSyncedAt ? "good" : "unknown",
+          reftab: data.reftabSyncedAt ? "good" : "unknown",
+        });
+      })
+      .catch(() => {});
+  }, [isAdmin]);
 
   return (
     <aside
@@ -94,8 +116,18 @@ export default function Sidebar() {
               <div className="mt-4 mb-1 px-3">
                 <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">Admin</p>
               </div>
-              <SyncButton label="Sync Entra" endpoint="/api/admin/sync-entra" />
-              <SyncButton label="Sync Reftab" endpoint="/api/admin/sync-reftab" />
+              <SyncButton
+                label="Sync Entra"
+                endpoint="/api/admin/sync-entra"
+                state={syncStates.entra}
+                onStateChange={(state) => setSyncStates((prev) => ({ ...prev, entra: state }))}
+              />
+              <SyncButton
+                label="Sync Reftab"
+                endpoint="/api/admin/sync-reftab"
+                state={syncStates.reftab}
+                onStateChange={(state) => setSyncStates((prev) => ({ ...prev, reftab: state }))}
+              />
             </>
           )}
 
@@ -112,17 +144,38 @@ export default function Sidebar() {
   );
 }
 
-function SyncButton({ label, endpoint }: { label: string; endpoint: string }) {
+function SyncButton({
+  label,
+  endpoint,
+  state,
+  onStateChange,
+}: {
+  label: string;
+  endpoint: string;
+  state: SyncState;
+  onStateChange: (state: SyncState) => void;
+}) {
+  const iconClassName = {
+    unknown: "text-[var(--muted)]",
+    good: "text-emerald-600",
+    syncing: "text-amber-500",
+    error: "text-red-600",
+  }[state];
+
   const handleSync = async () => {
+    onStateChange("syncing");
     try {
       const res = await fetch(endpoint, { method: "POST" });
       const data = await res.json();
       if (res.ok) {
+        onStateChange("good");
         alert(`${label} completed: ${JSON.stringify(data)}`);
       } else {
+        onStateChange("error");
         alert(`${label} failed: ${data.error ?? "Unknown error"}`);
       }
     } catch {
+      onStateChange("error");
       alert(`${label} failed: Network error`);
     }
   };
@@ -131,9 +184,11 @@ function SyncButton({ label, endpoint }: { label: string; endpoint: string }) {
     <button
       type="button"
       onClick={handleSync}
+      disabled={state === "syncing"}
       className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-[var(--text-secondary)] hover:bg-gray-200 hover:text-[var(--text)] transition"
+      title={state === "syncing" ? `${label} is running` : state === "good" ? `${label} last completed successfully` : state === "error" ? `${label} last failed` : `${label} has not synced yet`}
     >
-      <SyncIcon className="h-4 w-4 shrink-0" />
+      <SyncIcon className={`h-4 w-4 shrink-0 ${iconClassName} ${state === "syncing" ? "animate-spin" : ""}`} />
       <span>{label}</span>
     </button>
   );
