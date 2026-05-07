@@ -15,20 +15,29 @@ echo "==> Using DATABASE_URL=${DATABASE_URL}"
 echo "==> Running prisma db push (create/sync tables)..."
 npx prisma db push --skip-generate --accept-data-loss 2>&1
 
-echo "==> Checking if seed data is needed..."
-node -e "
-const { PrismaClient } = require('@prisma/client');
-const p = new PrismaClient();
-p.user.count().then(c => {
-  if (c === 0) {
-    console.log('No users found — running seed...');
-    process.exit(0);
-  } else {
-    console.log('Users exist (' + c + ') — skipping seed.');
-    process.exit(1);
-  }
-}).catch(() => process.exit(0)).finally(() => p.\$disconnect());
-" && npx tsx prisma/seed.ts 2>&1 || true
+if [ "${CLEAN_DEMO_DATA_ON_STARTUP:-true}" = "true" ]; then
+  echo "==> Removing demo seed data if present..."
+  npx tsx scripts/cleanup-demo-data.ts 2>&1 || true
+fi
+
+if [ "${AUTO_SEED_DEMO_DATA:-false}" = "true" ]; then
+  echo "==> Checking if demo seed data is needed..."
+  node -e "
+  const { PrismaClient } = require('@prisma/client');
+  const p = new PrismaClient();
+  p.user.count().then(c => {
+    if (c === 0) {
+      console.log('No users found — running demo seed...');
+      process.exit(0);
+    } else {
+      console.log('Users exist (' + c + ') — skipping demo seed.');
+      process.exit(1);
+    }
+  }).catch(() => process.exit(0)).finally(() => p.\$disconnect());
+  " && npx tsx prisma/seed.ts 2>&1 || true
+else
+  echo "==> Demo seed disabled. Set AUTO_SEED_DEMO_DATA=true to load sample users/equipment."
+fi
 
 echo "==> Starting background sync worker..."
 npx tsx scripts/sync-daemon.ts 2>&1 &

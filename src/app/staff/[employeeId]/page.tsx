@@ -29,6 +29,7 @@ function detailRows(e: Equipment): Array<[string, string]> {
   const details: Array<[string, string | undefined]> = [
     ["AID", e.aid],
     ["Asset Tag", e.assetTag],
+    ["Category", e.catName],
     ["Serial", e.serial],
     ["Model", e.model],
     ["Location", e.locationName],

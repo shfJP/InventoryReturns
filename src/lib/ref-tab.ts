@@ -109,6 +109,22 @@ function firstString(obj: Record<string, unknown>, paths: string[]): string | un
   return undefined;
 }
 
+function likelyCategoryFromFields(record: Record<string, unknown>): string | undefined {
+  for (const [key, value] of Object.entries(record)) {
+    const normalized = key.toLowerCase();
+    if (
+      normalized.includes("cat") ||
+      normalized.includes("category") ||
+      normalized === "type" ||
+      normalized.includes("device")
+    ) {
+      const text = valueToString(value);
+      if (text && !/^\d+$/.test(text)) return text;
+    }
+  }
+  return undefined;
+}
+
 function compactDetails(details: Record<string, string | undefined>): Record<string, string> {
   return Object.fromEntries(
     Object.entries(details).filter((entry): entry is [string, string] => Boolean(entry[1]))
@@ -131,7 +147,28 @@ function assetDetails(record: Record<string, unknown>): {
   const serial = firstString(record, ["serial", "serialNumber", "serial_number", "asset.serial", "asset.serialNumber"]);
   const title = firstString(record, ["title", "name", "asset.title", "asset.name"]);
   const model = firstString(record, [MODEL_FIELD, "model", "asset.model", "asset.title", "title", "name"]);
-  const catName = firstString(record, ["catName", "categoryName", "category.name", "category", "asset.catName", "asset.categoryName", "asset.category.name"]);
+  const catName = firstString(record, [
+    "catName",
+    "categoryName",
+    "category.name",
+    "category.title",
+    "category.catName",
+    "category",
+    "cat.name",
+    "cat.title",
+    "cat.catName",
+    "cat",
+    "asset.catName",
+    "asset.categoryName",
+    "asset.category.name",
+    "asset.category.title",
+    "asset.cat.name",
+    "asset.cat.title",
+    "fields.catName",
+    "fields.category",
+    "fields.categoryName",
+  ]) ?? likelyCategoryFromFields(record);
+  const categoryId = firstString(record, ["cid", "categoryId", "catId", "category.id", "cat.id", "asset.cid", "asset.categoryId"]);
   const locationName = firstString(record, ["locationName", "location.name", "location", "clName", "asset.locationName", "asset.location.name"]);
   const statusName = firstString(record, ["statusName", "status.name", "status", "asset.statusName", "asset.status.name", "loan.status"]);
   return {
@@ -150,6 +187,7 @@ function assetDetails(record: Record<string, unknown>): {
       model,
       title,
       catName,
+      categoryId,
       locationName,
       statusName,
       manufacturer: firstString(record, ["manufacturer", "make", "asset.manufacturer", "asset.make"]),
