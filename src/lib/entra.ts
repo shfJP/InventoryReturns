@@ -178,7 +178,7 @@ export async function syncEntraToDb(): Promise<SyncResult> {
   for (const user of missingUsers) {
     const assignedItems = await prisma.equipmentAssignment.findMany({
       where: { assignedToEmployeeId: user.employeeId },
-      select: { assetTag: true, serial: true, model: true },
+      select: { assetTag: true, catName: true, serial: true, model: true },
     });
     const collectionEvents = await prisma.collectionEvent.findMany({
       where: {
@@ -206,6 +206,7 @@ export async function syncEntraToDb(): Promise<SyncResult> {
           managerEmployeeId: user.manager?.employeeId ?? null,
           managerName: user.manager?.displayName ?? null,
           managerEmail: user.manager?.email ?? null,
+          catName: item.catName,
           serial: item.serial,
           model: item.model,
         },
@@ -218,6 +219,7 @@ export async function syncEntraToDb(): Promise<SyncResult> {
           managerName: user.manager?.displayName ?? null,
           managerEmail: user.manager?.email ?? null,
           assetTag: item.assetTag,
+          catName: item.catName,
           serial: item.serial,
           model: item.model,
         },

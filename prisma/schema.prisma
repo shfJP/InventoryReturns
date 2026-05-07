@@ -82,6 +82,7 @@ model UnresolvedCollection {
   managerName              String?
   managerEmail             String?
   assetTag                 String
+  catName                  String?
   serial                   String?
   model                    String?
   source                   String   @default("entra_sync")

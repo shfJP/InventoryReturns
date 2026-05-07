@@ -37,6 +37,7 @@ export async function GET(req: NextRequest) {
       managerName: entry.managerName,
       managerEmail: entry.managerEmail,
       assetTag: entry.assetTag,
+      catName: entry.catName,
       serial: entry.serial,
       model: entry.model,
       source: entry.source,

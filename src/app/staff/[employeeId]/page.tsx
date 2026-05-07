@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { isLoggedIn } from "@/lib/auth-session";
 
@@ -20,9 +20,44 @@ type Equipment = {
   source: string;
 };
 
+type SortDirection = "asc" | "desc";
+type EquipmentSortKey = "title" | "catName" | "aid" | "assetTag" | "serial" | "model" | "locationName" | "statusName" | "source";
+
+const equipmentColumns: Array<{ key: EquipmentSortKey; label: string }> = [
+  { key: "title", label: "Assigned Equipment" },
+  { key: "catName", label: "Category" },
+  { key: "aid", label: "AID" },
+  { key: "assetTag", label: "Asset Tag" },
+  { key: "serial", label: "Serial" },
+  { key: "model", label: "Model" },
+  { key: "locationName", label: "Location" },
+  { key: "statusName", label: "Status" },
+  { key: "source", label: "Source" },
+];
+
 function equipmentTitle(e: Equipment): string {
   const title = e.title ?? e.model ?? e.assetTag;
   return e.catName ? `${e.catName} - ${title}` : title;
+}
+
+function equipmentSortValue(e: Equipment, key: EquipmentSortKey) {
+  if (key === "title") return equipmentTitle(e);
+  return e[key] ?? "";
+}
+
+function equipmentFilterText(e: Equipment) {
+  return [
+    equipmentTitle(e),
+    e.catName,
+    e.aid,
+    e.assetTag,
+    e.serial,
+    e.model,
+    e.locationName,
+    e.statusName,
+    e.source,
+    ...detailRows(e).flat(),
+  ].filter(Boolean).join(" ").toLowerCase();
 }
 
 function detailRows(e: Equipment): Array<[string, string]> {
@@ -56,6 +91,9 @@ export default function StaffDetailPage() {
   const [collecting, setCollecting] = useState<string | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  const [equipmentFilter, setEquipmentFilter] = useState("");
+  const [equipmentSortKey, setEquipmentSortKey] = useState<EquipmentSortKey>("title");
+  const [equipmentSortDirection, setEquipmentSortDirection] = useState<SortDirection>("asc");
   /** Shown after staff loaded; collect API failures were previously invisible. */
   const [actionError, setActionError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -136,6 +174,28 @@ export default function StaffDetailPage() {
     }
   }
 
+  const filteredEquipment = useMemo(() => {
+    const query = equipmentFilter.trim().toLowerCase();
+    const filtered = query ? equipment.filter((item) => equipmentFilterText(item).includes(query)) : equipment;
+    return [...filtered].sort((a, b) => {
+      const result = String(equipmentSortValue(a, equipmentSortKey)).localeCompare(
+        String(equipmentSortValue(b, equipmentSortKey)),
+        undefined,
+        { numeric: true, sensitivity: "base" }
+      );
+      return equipmentSortDirection === "asc" ? result : -result;
+    });
+  }, [equipment, equipmentFilter, equipmentSortDirection, equipmentSortKey]);
+
+  function handleEquipmentSort(key: EquipmentSortKey) {
+    if (key === equipmentSortKey) {
+      setEquipmentSortDirection((current) => current === "asc" ? "desc" : "asc");
+      return;
+    }
+    setEquipmentSortKey(key);
+    setEquipmentSortDirection("asc");
+  }
+
   if (loading) return <div className="text-[var(--muted)]">Loading…</div>;
   if (error && !staff) return <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">{error}</div>;
   if (!staff) return <div className="text-[var(--muted)]">Staff not found.</div>;
@@ -189,46 +249,93 @@ export default function StaffDetailPage() {
       )}
 
       <section className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm">
-        <h2 className="mb-4 text-lg font-semibold text-[var(--text)]">Assigned equipment</h2>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-[var(--text)]">Assigned equipment</h2>
+            <p className="text-sm text-[var(--muted)]">{filteredEquipment.length} of {equipment.length} item(s)</p>
+          </div>
+          <input
+            type="search"
+            aria-label="Filter assigned equipment"
+            placeholder="Filter equipment"
+            className="w-full max-w-sm rounded-md border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:outline-none sm:w-72"
+            value={equipmentFilter}
+            onChange={(event) => setEquipmentFilter(event.target.value)}
+          />
+        </div>
         {equipment.length === 0 ? (
           <p className="text-[var(--muted)]">No equipment listed for this employee.</p>
         ) : (
-          <div className="space-y-4">
-            {equipment.map((e) => (
-              <div
-                key={`${e.assetTag}-${e.assignedToEmployeeId}`}
-                className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--table-header-bg)]/30 p-4"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium text-[var(--text)]">{equipmentTitle(e)}</p>
-                  <dl className="mt-2 grid gap-x-4 gap-y-1 text-sm sm:grid-cols-2">
-                    {detailRows(e).map(([label, value]) => (
-                      <div key={`${e.assetTag}-${label}`} className="flex min-w-0 gap-1">
-                        <dt className="shrink-0 text-[var(--muted)]">{label}:</dt>
-                        <dd className="truncate text-[var(--text-secondary)]" title={value}>{value}</dd>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1200px]">
+              <thead>
+                <tr>
+                  {equipmentColumns.map((column) => (
+                    <th key={column.key} className="table-header">
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-between gap-2 text-left"
+                        onClick={() => handleEquipmentSort(column.key)}
+                      >
+                        <span>{column.label}</span>
+                        <span className="text-xs text-[var(--muted)]">
+                          {equipmentSortKey === column.key ? (equipmentSortDirection === "asc" ? "ASC" : "DESC") : "SORT"}
+                        </span>
+                      </button>
+                    </th>
+                  ))}
+                  <th className="table-header">Details</th>
+                  <th className="table-header">Notes</th>
+                  <th className="table-header">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredEquipment.map((e) => (
+                  <tr key={`${e.assetTag}-${e.assignedToEmployeeId}`} className="border-b border-[var(--border)] transition hover:bg-[var(--table-header-bg)]/50">
+                    <td className="table-cell font-medium text-[var(--text)]">{equipmentTitle(e)}</td>
+                    <td className="table-cell text-[var(--text-secondary)]">{e.catName ?? "-"}</td>
+                    <td className="table-cell text-[var(--text-secondary)]">{e.aid ?? "-"}</td>
+                    <td className="table-cell font-medium text-[var(--text)]">{e.assetTag}</td>
+                    <td className="table-cell text-[var(--text-secondary)]">{e.serial ?? "-"}</td>
+                    <td className="table-cell text-[var(--text-secondary)]">{e.model ?? "-"}</td>
+                    <td className="table-cell text-[var(--text-secondary)]">{e.locationName ?? "-"}</td>
+                    <td className="table-cell text-[var(--text-secondary)]">{e.statusName ?? "-"}</td>
+                    <td className="table-cell text-[var(--text-secondary)]">{e.source}</td>
+                    <td className="table-cell text-xs text-[var(--text-secondary)]">
+                      <div className="max-w-[280px] space-y-1">
+                        {detailRows(e).map(([label, value]) => (
+                          <div key={`${e.assetTag}-${label}`} className="truncate" title={`${label}: ${value}`}>
+                            <span className="text-[var(--muted)]">{label}:</span> {value}
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </dl>
-                </div>
-                <div className="flex flex-1 flex-wrap items-end gap-2 sm:flex-none">
-                  <input
-                    type="text"
-                    placeholder="Notes (optional)"
-                    className="max-w-xs rounded-md border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:outline-none"
-                    value={notes[e.assetTag] ?? ""}
-                    onChange={(ev) => setNotes((prev) => ({ ...prev, [e.assetTag]: ev.target.value }))}
-                  />
-                  <button
-                    type="button"
-                    className="rounded-lg bg-[var(--success)] px-3 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
-                    disabled={collecting === e.assetTag}
-                    onClick={() => markCollected(e.assetTag, e.serial)}
-                  >
-                    {collecting === e.assetTag ? "Marking…" : "Mark collected"}
-                  </button>
-                </div>
-              </div>
-            ))}
+                    </td>
+                    <td className="table-cell">
+                      <input
+                        type="text"
+                        placeholder="Notes"
+                        className="w-48 rounded-md border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:outline-none"
+                        value={notes[e.assetTag] ?? ""}
+                        onChange={(ev) => setNotes((prev) => ({ ...prev, [e.assetTag]: ev.target.value }))}
+                      />
+                    </td>
+                    <td className="table-cell">
+                      <button
+                        type="button"
+                        className="whitespace-nowrap rounded-lg bg-[var(--success)] px-3 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+                        disabled={collecting === e.assetTag}
+                        onClick={() => markCollected(e.assetTag, e.serial)}
+                      >
+                        {collecting === e.assetTag ? "Marking..." : "Mark collected"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {filteredEquipment.length === 0 && (
+              <p className="py-12 text-center text-[var(--muted)]">No equipment matches the current filter.</p>
+            )}
           </div>
         )}
       </section>
