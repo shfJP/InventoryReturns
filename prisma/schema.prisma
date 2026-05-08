@@ -93,7 +93,24 @@ model UnresolvedCollection {
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
 
+  auditEvents              UnresolvedCollectionAudit[]
+
   @@unique([employeeId, assetTag, status])
+}
+
+model UnresolvedCollectionAudit {
+  id                     String   @id @default(cuid())
+  unresolvedCollectionId String
+  action                 String
+  oldStatus              String?
+  newStatus              String?
+  note                   String?
+  actorEmployeeId        String?
+  actorName              String?
+  actorEmail             String?
+  createdAt              DateTime @default(now())
+
+  unresolvedCollection   UnresolvedCollection @relation(fields: [unresolvedCollectionId], references: [id], onDelete: Cascade)
 }
 
 model AppSetting {

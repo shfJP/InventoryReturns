@@ -20,6 +20,17 @@ type UnresolvedCollection = {
   model: string | null;
   source: string;
   investigationNotes: string | null;
+  auditEvents: Array<{
+    id: string;
+    action: string;
+    oldStatus: string | null;
+    newStatus: string | null;
+    note: string | null;
+    actorEmployeeId: string | null;
+    actorName: string | null;
+    actorEmail: string | null;
+    createdAt: string;
+  }>;
   detectedAt: string;
   status: string;
 };
@@ -34,6 +45,10 @@ type UnresolvedResponse = {
   items: UnresolvedCollection[];
   summary?: LossSummary;
 };
+
+function normalizeItem(item: UnresolvedCollection): UnresolvedCollection {
+  return { ...item, auditEvents: item.auditEvents ?? [] };
+}
 
 function dollarsFromCents(cents: number) {
   return (cents / 100).toLocaleString(undefined, {
@@ -75,6 +90,39 @@ const investigationStatuses = [
   { value: "PENDING_VENDOR", label: "Pending Vendor" },
   { value: "RESOLVED", label: "Resolved" },
 ];
+
+function investigationStatusLabel(statusValue: string) {
+  return investigationStatuses.find((status) => status.value === statusValue)?.label ?? statusValue;
+}
+
+function collectionMailtoHref(item: UnresolvedCollection) {
+  if (!item.managerEmail) return null;
+  const subject = `Equipment collection needed: ${item.employeeName} - ${item.assetTag}`;
+  const body = [
+    `Hello ${item.managerName ?? "Manager"},`,
+    "",
+    "We are following up on an unresolved equipment return that appears to be under your management responsibility. Please coordinate collection of the equipment listed below and return it to the IT Department as soon as possible.",
+    "",
+    "Collection details:",
+    `Employee: ${item.employeeName}${item.employeeEmail ? ` <${item.employeeEmail}>` : ""}`,
+    `Employee ID: ${item.employeeId}`,
+    `Asset tag: ${item.assetTag}`,
+    `Category: ${item.catName ?? "Not available"}`,
+    `Serial: ${item.serial ?? "Not available"}`,
+    `Model: ${item.model ?? "Not available"}`,
+    `Current investigation status: ${investigationStatusLabel(item.status)}`,
+    `Detected: ${new Date(item.detectedAt).toLocaleString()}`,
+    "",
+    "Investigation notes:",
+    item.investigationNotes?.trim() || "No investigation notes have been recorded yet.",
+    "",
+    "Please reply with the expected return date, current equipment location, or any blockers preventing collection. This message copies IT Help so a collection support ticket can be tracked.",
+    "",
+    "Thank you.",
+  ].join("\n");
+
+  return `mailto:${encodeURIComponent(item.managerEmail)}?cc=${encodeURIComponent("ithelp@sevenhills.org")}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
 
 function unresolvedSortValue(item: UnresolvedCollection, key: UnresolvedSortKey) {
   if (key === "employee") return `${item.employeeName} ${item.employeeEmail ?? item.employeeId}`;
@@ -179,7 +227,7 @@ function UnresolvedTable({
       { header: "Serial", value: (item) => item.serial },
       { header: "Model", value: (item) => item.model },
       { header: "Detected", value: (item) => new Date(item.detectedAt).toLocaleString() },
-      { header: "Status", value: (item) => investigationStatuses.find((status) => status.value === item.status)?.label ?? item.status },
+      { header: "Status", value: (item) => investigationStatusLabel(item.status) },
       { header: "Investigation Notes", value: (item) => item.investigationNotes },
     ], filteredItems);
   }
@@ -192,7 +240,12 @@ function UnresolvedTable({
     });
     const updated = await res.json();
     if (!res.ok) throw new Error(updated.error ?? "Failed to update investigation");
-    onUpdateItem({ ...item, ...data });
+    onUpdateItem({
+      ...item,
+      status: updated.status ?? item.status,
+      investigationNotes: updated.investigationNotes ?? item.investigationNotes,
+      auditEvents: updated.auditEvents ?? item.auditEvents,
+    });
   }
 
   return (
@@ -243,7 +296,19 @@ function UnresolvedTable({
                 </td>
                 <td className="table-cell">
                   <div className="font-medium text-[var(--text)]">{item.managerName ?? "Unknown"}</div>
-                  <div className="text-xs text-[var(--muted)]">{item.managerEmail ?? item.managerEmployeeId ?? ""}</div>
+                  <div className="text-xs text-[var(--muted)]">
+                    {item.managerEmail ? (
+                      <a
+                        href={collectionMailtoHref(item) ?? undefined}
+                        className="text-[var(--accent)] hover:underline"
+                        title="Email manager and IT Help about this unresolved collection"
+                      >
+                        {item.managerEmail}
+                      </a>
+                    ) : (
+                      item.managerEmployeeId ?? ""
+                    )}
+                  </div>
                 </td>
                 <td className="table-cell font-medium text-[var(--text)]">{item.assetTag}</td>
                 <td className="table-cell text-[var(--text-secondary)]">{item.catName ?? "-"}</td>
@@ -265,7 +330,7 @@ function UnresolvedTable({
                     </select>
                   ) : (
                     <span className="inline-flex items-center rounded-full bg-orange-50 px-2.5 py-0.5 text-xs font-medium text-orange-700">
-                      {investigationStatuses.find((status) => status.value === item.status)?.label ?? item.status}
+                      {investigationStatusLabel(item.status)}
                     </span>
                   )}
                 </td>
@@ -280,12 +345,32 @@ function UnresolvedTable({
                         <span className="sr-only">Investigation notes</span>
                       </summary>
                       <textarea
-                        defaultValue={item.investigationNotes ?? ""}
-                        className="mt-2 h-24 w-64 rounded-md border border-[var(--border)] p-2 text-sm text-[var(--text)]"
+                        defaultValue=""
+                        placeholder="Add an investigation note"
+                        className="mt-2 h-24 w-72 rounded-md border border-[var(--border)] p-2 text-sm text-[var(--text)]"
                         onBlur={(event) => {
-                          updateInvestigation(item, { investigationNotes: event.target.value }).catch((e) => alert(e instanceof Error ? e.message : "Failed to save notes"));
+                          const note = event.target.value.trim();
+                          if (!note) return;
+                          updateInvestigation(item, { investigationNotes: note })
+                            .then(() => { event.target.value = ""; })
+                            .catch((e) => alert(e instanceof Error ? e.message : "Failed to save notes"));
                         }}
                       />
+                      {item.investigationNotes && (
+                        <pre className="mt-2 max-h-36 w-72 overflow-auto whitespace-pre-wrap rounded-md bg-gray-50 p-2 text-xs text-[var(--text-secondary)]">{item.investigationNotes}</pre>
+                      )}
+                      {item.auditEvents.length > 0 && (
+                        <div className="mt-2 max-h-32 w-72 overflow-auto rounded-md border border-[var(--border)] p-2">
+                          <p className="mb-1 text-xs font-medium text-[var(--muted)]">Audit log</p>
+                          {item.auditEvents.map((event) => (
+                            <div key={event.id} className="border-t border-[var(--border)] py-1 text-xs text-[var(--text-secondary)] first:border-t-0">
+                              <div className="font-medium text-[var(--text)]">{event.action.replace(/_/g, " ")}</div>
+                              <div>{new Date(event.createdAt).toLocaleString()} · {event.actorName ?? event.actorEmail ?? "Unknown user"}</div>
+                              {event.note && <div className="mt-0.5">{event.note}</div>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </details>
                   ) : (
                     <span className="text-[var(--text-secondary)]">{item.investigationNotes ?? "-"}</span>
@@ -324,11 +409,11 @@ export default function UnresolvedCollectionsPage() {
       })
       .then((data: UnresolvedResponse | UnresolvedCollection[]) => {
         if (Array.isArray(data)) {
-          setItems(data);
+          setItems(data.map(normalizeItem));
           setSummary(null);
           return;
         }
-        setItems(data.items);
+        setItems(data.items.map(normalizeItem));
         setSummary(data.summary ?? null);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load unresolved collections"))

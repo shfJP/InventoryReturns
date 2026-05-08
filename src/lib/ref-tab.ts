@@ -808,6 +808,8 @@ export type ReftabSyncResult = {
   upserted: number;
   skippedCollected: number;
   skippedUnmatchedAssignee: number;
+  staleAssignmentsRemoved: number;
+  staleUnresolvedResolved: number;
   total: number;
 };
 
@@ -827,6 +829,8 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
   let upserted = 0;
   let skippedCollected = 0;
   let skippedUnmatchedAssignee = 0;
+  let staleAssignmentsRemoved = 0;
+  let staleUnresolvedResolved = 0;
 
   // Get all collected asset+employee combinations
   const collectedEvents = await prisma.collectionEvent.findMany({
@@ -850,13 +854,18 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
     });
   }
 
+  const currentAssetTags = Array.from(new Set(assets.map((asset) => asset.asset_tag).filter(Boolean)));
+  const currentAssignmentKeys = new Set<string>();
+
   for (const asset of assets) {
+    const resolvedEmployeeId = resolveAssigneeEmployeeId(asset.assigned_to_employee_id, userAliases);
+    if (resolvedEmployeeId) currentAssignmentKeys.add(`${asset.asset_tag}-${resolvedEmployeeId}`);
+
     if (collectedAssetTags.includes(asset.asset_tag)) {
       skippedCollected++;
       continue;
     }
 
-    const resolvedEmployeeId = resolveAssigneeEmployeeId(asset.assigned_to_employee_id, userAliases);
     if (!resolvedEmployeeId) {
       skippedUnmatchedAssignee++;
       await logUnmatchedReftabAssignment(asset, userAliases);
@@ -907,8 +916,48 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
     upserted++;
   }
 
-  const result = { upserted, skippedCollected, skippedUnmatchedAssignee, total: assets.length };
-  console.info(`[reftab] Sync complete: total=${result.total}, upserted=${result.upserted}, skippedCollected=${result.skippedCollected}, skippedUnmatchedAssignee=${result.skippedUnmatchedAssignee}.`);
+  if (currentAssetTags.length > 0) {
+    const staleAssignments = await prisma.equipmentAssignment.findMany({
+      where: { source: "ref_tab" },
+      select: { id: true, assetTag: true, assignedToEmployeeId: true },
+    });
+    const staleAssignmentIds = staleAssignments
+      .filter((assignment) => !currentAssignmentKeys.has(`${assignment.assetTag}-${assignment.assignedToEmployeeId}`))
+      .map((assignment) => assignment.id);
+    for (let i = 0; i < staleAssignmentIds.length; i += 500) {
+      const result = await prisma.equipmentAssignment.deleteMany({
+        where: { id: { in: staleAssignmentIds.slice(i, i + 500) } },
+      });
+      staleAssignmentsRemoved += result.count;
+    }
+
+    const staleUnresolved = await prisma.unresolvedCollection.findMany({
+      where: {
+        status: { not: "RESOLVED" },
+        assetTag: { notIn: currentAssetTags },
+      },
+      select: { id: true },
+    });
+    for (let i = 0; i < staleUnresolved.length; i += 500) {
+      const ids = staleUnresolved.slice(i, i + 500).map((item) => item.id);
+      const result = await prisma.unresolvedCollection.updateMany({
+        where: { id: { in: ids } },
+        data: { status: "RESOLVED", resolvedAt: now },
+      });
+      staleUnresolvedResolved += result.count;
+      await prisma.unresolvedCollectionAudit.createMany({
+        data: ids.map((id) => ({
+          unresolvedCollectionId: id,
+          action: "AUTO_RESOLVED_REFTAB_SYNC",
+          newStatus: "RESOLVED",
+          note: "Resolved automatically because the asset no longer appears in Reftab checked-out assignments.",
+        })),
+      });
+    }
+  }
+
+  const result = { upserted, skippedCollected, skippedUnmatchedAssignee, staleAssignmentsRemoved, staleUnresolvedResolved, total: assets.length };
+  console.info(`[reftab] Sync complete: total=${result.total}, upserted=${result.upserted}, skippedCollected=${result.skippedCollected}, skippedUnmatchedAssignee=${result.skippedUnmatchedAssignee}, staleAssignmentsRemoved=${result.staleAssignmentsRemoved}, staleUnresolvedResolved=${result.staleUnresolvedResolved}.`);
   return result;
 }
 
