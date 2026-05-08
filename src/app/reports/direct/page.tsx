@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { isLoggedIn } from "@/lib/auth-session";
+import { exportRowsToCsv } from "@/lib/csv-export";
 
 type DirectReport = {
   employeeId: string;
@@ -43,14 +44,33 @@ export default function DirectReportsPage() {
   const totalOutstanding = reports.reduce((sum, r) => sum + r.outstanding, 0);
   const totalCollected = reports.reduce((sum, r) => sum + r.collected, 0);
 
+  function exportReports() {
+    exportRowsToCsv("direct-reports.csv", [
+      { header: "Name", value: (row) => row.displayName },
+      { header: "Employee ID", value: (row) => row.employeeId },
+      { header: "Email", value: (row) => row.email },
+      { header: "Active", value: (row) => row.isActive ? "Yes" : "No" },
+      { header: "Assigned", value: (row) => row.totalEverAssigned },
+      { header: "Collected", value: (row) => row.collected },
+      { header: "Outstanding", value: (row) => row.outstanding },
+    ], reports);
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
         <Link href="/" className="text-sm text-[var(--muted)] hover:text-[var(--accent)]">← Dashboard</Link>
       </div>
 
-      <h1 className="text-2xl font-bold text-[var(--text)]">Direct Reports</h1>
-      <p className="text-[var(--muted)]">Equipment and collection status for your direct reports.</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-[var(--text)]">Direct Reports</h1>
+          <p className="text-[var(--muted)]">Equipment and collection status for your direct reports.</p>
+        </div>
+        <button type="button" onClick={exportReports} className="rounded-md bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)]">
+          Export Excel
+        </button>
+      </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
         <div className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm">

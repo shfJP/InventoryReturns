@@ -87,6 +87,7 @@ model UnresolvedCollection {
   model                    String?
   source                   String   @default("entra_sync")
   status                   String   @default("UNRESOLVED")
+  investigationNotes       String?
   detectedAt               DateTime @default(now())
   resolvedAt               DateTime?
   createdAt                DateTime @default(now())

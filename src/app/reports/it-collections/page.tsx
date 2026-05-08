@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { isLoggedIn } from "@/lib/auth-session";
+import { exportRowsToCsv } from "@/lib/csv-export";
 
 type ManagerRank = {
   managerName: string;
@@ -53,6 +54,17 @@ export default function ITCollectionsPage() {
   if (error) return <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">{error}</div>;
 
   const itPercent = data && data.total > 0 ? Math.round((data.totalByIT / data.total) * 100) : 0;
+  function exportManagers() {
+    if (!data) return;
+    exportRowsToCsv("it-collections-manager-ranking.csv", [
+      { header: "Manager", value: (row) => row.managerName },
+      { header: "Manager ID", value: (row) => row.managerId },
+      { header: "Total Items", value: (row) => row.totalUnderReports },
+      { header: "Collected by Manager", value: (row) => row.collectedByManager },
+      { header: "Collected by IT", value: (row) => row.collectedByIT },
+      { header: "IT Rate", value: (row) => row.totalUnderReports > 0 ? `${Math.round((row.collectedByIT / row.totalUnderReports) * 100)}%` : "0%" },
+    ], data.managerRanking);
+  }
 
   return (
     <div className="space-y-6">
@@ -146,7 +158,10 @@ export default function ITCollectionsPage() {
           {/* Manager ranking table */}
           <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm">
             <div className="border-b border-[var(--border)] bg-[var(--table-header-bg)] px-4 py-3">
-              <h2 className="text-lg font-semibold text-[var(--text)]">Manager Ranking</h2>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold text-[var(--text)]">Manager Ranking</h2>
+                <button type="button" onClick={exportManagers} className="rounded-md bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)]">Export Excel</button>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[600px]">

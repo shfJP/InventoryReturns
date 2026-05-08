@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
 import type { DashboardData } from "@/types/dashboard";
+import { exportRowsToCsv } from "@/lib/csv-export";
 import ContentHeader from "./ContentHeader";
 import Pagination from "./Pagination";
 
@@ -71,6 +72,16 @@ export default function DashboardTable({ data, initialSearchQuery = "" }: { data
     setPageSize(size);
     setPage(1);
   };
+  const exportStaff = () => {
+    exportRowsToCsv("dashboard-reports.csv", [
+      { header: "Name", value: (s) => s.displayName },
+      { header: "Employee ID", value: (s) => s.employeeId },
+      { header: "Email", value: (s) => s.email },
+      { header: "Active", value: (s) => s.isActive === false ? "No" : "Yes" },
+      { header: "Outstanding", value: (s) => (equipmentByEmployee[s.employeeId] ?? []).filter((e) => e.collectionStatus !== "collected").length },
+      { header: "Collected", value: (s) => (equipmentByEmployee[s.employeeId] ?? []).filter((e) => e.collectionStatus === "collected").length },
+    ], filteredStaff);
+  };
 
   return (
     <div className="space-y-6">
@@ -88,6 +99,11 @@ export default function DashboardTable({ data, initialSearchQuery = "" }: { data
         onPageSizeChange={handlePageSizeChange}
         showSettingsLink={true}
       />
+      <div className="flex justify-end">
+        <button type="button" onClick={exportStaff} className="rounded-md bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)]">
+          Export Excel
+        </button>
+      </div>
       <p className="text-sm text-[var(--muted)]">
         Signed in as {me.displayName} ({me.employeeId}) · Showing {filteredStaff.length} of {staff.length}
       </p>

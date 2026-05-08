@@ -4,6 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { isLoggedIn } from "@/lib/auth-session";
+import { exportRowsToCsv } from "@/lib/csv-export";
 
 type Equipment = {
   id: string | null;
@@ -190,6 +191,18 @@ export default function StaffDetailPage() {
     setEquipmentSortDirection("asc");
   }
 
+  function exportEquipment() {
+    exportRowsToCsv(`assigned-equipment-${employeeId}.csv`, [
+      { header: "Assigned Equipment", value: (item) => equipmentTitle(item) },
+      { header: "Category", value: (item) => item.catName },
+      { header: "Asset Tag", value: (item) => item.assetTag },
+      { header: "Serial", value: (item) => item.serial },
+      { header: "Status", value: (item) => item.statusName },
+      { header: "Details", value: (item) => detailRows(item).map(([label, value]) => `${label}: ${value}`).join("; ") },
+      { header: "Notes", value: (item) => notes[item.assetTag] },
+    ], filteredEquipment);
+  }
+
   if (loading) return <div className="text-[var(--muted)]">Loading…</div>;
   if (error && !staff) return <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">{error}</div>;
   if (!staff) return <div className="text-[var(--muted)]">Staff not found.</div>;
@@ -256,6 +269,13 @@ export default function StaffDetailPage() {
             value={equipmentFilter}
             onChange={(event) => setEquipmentFilter(event.target.value)}
           />
+          <button
+            type="button"
+            onClick={exportEquipment}
+            className="rounded-md bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)]"
+          >
+            Export Excel
+          </button>
         </div>
         {equipment.length === 0 ? (
           <p className="text-[var(--muted)]">No equipment listed for this employee.</p>

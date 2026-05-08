@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { isLoggedIn } from "@/lib/auth-session";
+import { exportRowsToCsv } from "@/lib/csv-export";
 
 type UnresolvedCollection = {
   id: string;
@@ -18,6 +19,7 @@ type UnresolvedCollection = {
   serial: string | null;
   model: string | null;
   source: string;
+  investigationNotes: string | null;
   detectedAt: string;
   status: string;
 };
@@ -51,7 +53,7 @@ function hasKnownManager(item: UnresolvedCollection) {
 }
 
 type SortDirection = "asc" | "desc";
-type UnresolvedSortKey = "employee" | "manager" | "assetTag" | "catName" | "serial" | "model" | "detectedAt" | "status";
+type UnresolvedSortKey = "employee" | "manager" | "assetTag" | "catName" | "serial" | "model" | "detectedAt" | "status" | "investigationNotes";
 
 const unresolvedColumns: Array<{ key: UnresolvedSortKey; label: string }> = [
   { key: "employee", label: "Employee" },
@@ -62,6 +64,16 @@ const unresolvedColumns: Array<{ key: UnresolvedSortKey; label: string }> = [
   { key: "model", label: "Model" },
   { key: "detectedAt", label: "Detected" },
   { key: "status", label: "Status" },
+  { key: "investigationNotes", label: "Notes" },
+];
+
+const investigationStatuses = [
+  { value: "UNRESOLVED", label: "Unresolved" },
+  { value: "INVESTIGATING", label: "Investigating" },
+  { value: "PENDING_MANAGER", label: "Pending Manager" },
+  { value: "PENDING_IT", label: "Pending IT" },
+  { value: "PENDING_VENDOR", label: "Pending Vendor" },
+  { value: "RESOLVED", label: "Resolved" },
 ];
 
 function unresolvedSortValue(item: UnresolvedCollection, key: UnresolvedSortKey) {
@@ -84,6 +96,7 @@ function unresolvedFilterText(item: UnresolvedCollection) {
     item.serial,
     item.model,
     item.source,
+    item.investigationNotes,
     item.status,
     new Date(item.detectedAt).toLocaleString(),
   ].filter(Boolean).join(" ").toLowerCase();
@@ -118,9 +131,15 @@ function SortHeader({
 function UnresolvedTable({
   items,
   emptyText,
+  isAdmin,
+  onUpdateItem,
+  exportName,
 }: {
   items: UnresolvedCollection[];
   emptyText: string;
+  isAdmin: boolean;
+  onUpdateItem: (item: UnresolvedCollection) => void;
+  exportName: string;
 }) {
   const [filter, setFilter] = useState("");
   const [sortKey, setSortKey] = useState<UnresolvedSortKey>("detectedAt");
@@ -147,9 +166,38 @@ function UnresolvedTable({
     setSortDirection(key === "detectedAt" ? "desc" : "asc");
   }
 
+  function exportTable() {
+    exportRowsToCsv(exportName, [
+      { header: "Employee", value: (item) => item.employeeName },
+      { header: "Employee Email", value: (item) => item.employeeEmail },
+      { header: "Employee ID", value: (item) => item.employeeId },
+      { header: "Manager", value: (item) => item.managerName ?? "Unknown" },
+      { header: "Manager Email", value: (item) => item.managerEmail },
+      { header: "Manager Employee ID", value: (item) => item.managerEmployeeId },
+      { header: "Asset Tag", value: (item) => item.assetTag },
+      { header: "Category", value: (item) => item.catName },
+      { header: "Serial", value: (item) => item.serial },
+      { header: "Model", value: (item) => item.model },
+      { header: "Detected", value: (item) => new Date(item.detectedAt).toLocaleString() },
+      { header: "Status", value: (item) => investigationStatuses.find((status) => status.value === item.status)?.label ?? item.status },
+      { header: "Investigation Notes", value: (item) => item.investigationNotes },
+    ], filteredItems);
+  }
+
+  async function updateInvestigation(item: UnresolvedCollection, data: Partial<Pick<UnresolvedCollection, "status" | "investigationNotes">>) {
+    const res = await fetch("/api/reports/unresolved-collections", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: item.id, ...data }),
+    });
+    const updated = await res.json();
+    if (!res.ok) throw new Error(updated.error ?? "Failed to update investigation");
+    onUpdateItem({ ...item, ...data });
+  }
+
   return (
     <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm">
-      <div className="border-b border-[var(--border)] bg-[var(--table-header-bg)] px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--table-header-bg)] px-4 py-3">
         <input
           type="search"
           aria-label="Filter table"
@@ -158,9 +206,16 @@ function UnresolvedTable({
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
         />
+        <button
+          type="button"
+          onClick={exportTable}
+          className="rounded-md bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)]"
+        >
+          Export Excel
+        </button>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1000px]">
+        <table className="w-full min-w-[1180px]">
           <thead>
             <tr>
               {unresolvedColumns.map((column) => (
@@ -196,9 +251,45 @@ function UnresolvedTable({
                 <td className="table-cell text-[var(--text-secondary)]">{item.model ?? "-"}</td>
                 <td className="table-cell text-[var(--text-secondary)]">{new Date(item.detectedAt).toLocaleString()}</td>
                 <td className="table-cell">
-                  <span className="inline-flex items-center rounded-full bg-orange-50 px-2.5 py-0.5 text-xs font-medium text-orange-700">
-                    Pending Collection
-                  </span>
+                  {isAdmin ? (
+                    <select
+                      value={item.status}
+                      onChange={(event) => {
+                        updateInvestigation(item, { status: event.target.value }).catch((e) => alert(e instanceof Error ? e.message : "Failed to update status"));
+                      }}
+                      className="rounded-md border border-[var(--border)] bg-white px-2 py-1 text-sm text-[var(--text)]"
+                    >
+                      {investigationStatuses.map((status) => (
+                        <option key={status.value} value={status.value}>{status.label}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span className="inline-flex items-center rounded-full bg-orange-50 px-2.5 py-0.5 text-xs font-medium text-orange-700">
+                      {investigationStatuses.find((status) => status.value === item.status)?.label ?? item.status}
+                    </span>
+                  )}
+                </td>
+                <td className="table-cell">
+                  {isAdmin ? (
+                    <details className="group">
+                      <summary className="inline-flex cursor-pointer items-center rounded-md border border-[var(--border)] p-2 text-[var(--text-secondary)] hover:bg-gray-100" title="Investigation notes">
+                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5" />
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M18.5 2.5a2.121 2.121 0 113 3L12 15l-4 1 1-4 9.5-9.5z" />
+                        </svg>
+                        <span className="sr-only">Investigation notes</span>
+                      </summary>
+                      <textarea
+                        defaultValue={item.investigationNotes ?? ""}
+                        className="mt-2 h-24 w-64 rounded-md border border-[var(--border)] p-2 text-sm text-[var(--text)]"
+                        onBlur={(event) => {
+                          updateInvestigation(item, { investigationNotes: event.target.value }).catch((e) => alert(e instanceof Error ? e.message : "Failed to save notes"));
+                        }}
+                      />
+                    </details>
+                  ) : (
+                    <span className="text-[var(--text-secondary)]">{item.investigationNotes ?? "-"}</span>
+                  )}
                 </td>
               </tr>
             ))}
@@ -216,6 +307,7 @@ export default function UnresolvedCollectionsPage() {
   const router = useRouter();
   const [items, setItems] = useState<UnresolvedCollection[]>([]);
   const [summary, setSummary] = useState<LossSummary | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -241,6 +333,10 @@ export default function UnresolvedCollectionsPage() {
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load unresolved collections"))
       .finally(() => setLoading(false));
+    fetch("/api/me")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setIsAdmin(Boolean(data?.isAdmin)))
+      .catch(() => setIsAdmin(false));
   }, [router]);
 
   if (loading) return <div className="text-[var(--muted)]">Loading...</div>;
@@ -248,6 +344,12 @@ export default function UnresolvedCollectionsPage() {
 
   const knownManagerItems = items.filter(hasKnownManager);
   const unknownManagerItems = items.filter((item) => !hasKnownManager(item));
+  const updateItem = (updated: UnresolvedCollection) => {
+    setItems((current) => updated.status === "RESOLVED"
+      ? current.filter((item) => item.id !== updated.id)
+      : current.map((item) => item.id === updated.id ? updated : item)
+    );
+  };
 
   return (
     <div className="space-y-6">
@@ -303,7 +405,7 @@ export default function UnresolvedCollectionsPage() {
           <h2 className="text-lg font-semibold text-[var(--text)]">Known Managers</h2>
           <p className="text-sm text-[var(--muted)]">{knownManagerItems.length} unresolved item(s) with a manager responsible.</p>
         </div>
-        <UnresolvedTable items={knownManagerItems} emptyText="No unresolved collections with known managers." />
+        <UnresolvedTable items={knownManagerItems} emptyText="No unresolved collections with known managers." isAdmin={isAdmin} onUpdateItem={updateItem} exportName="known-manager-unresolved.csv" />
       </section>
 
       <section className="space-y-3">
@@ -311,7 +413,7 @@ export default function UnresolvedCollectionsPage() {
           <h2 className="text-lg font-semibold text-[var(--text)]">Legacy - Unknown Manager</h2>
           <p className="text-sm text-[var(--muted)]">{unknownManagerItems.length} unresolved item(s) without manager details.</p>
         </div>
-        <UnresolvedTable items={unknownManagerItems} emptyText="No legacy unresolved collections with unknown managers." />
+        <UnresolvedTable items={unknownManagerItems} emptyText="No legacy unresolved collections with unknown managers." isAdmin={isAdmin} onUpdateItem={updateItem} exportName="unknown-manager-unresolved.csv" />
       </section>
     </div>
   );

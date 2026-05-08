@@ -165,7 +165,7 @@ export default function CollectionByPeriodPage() {
           onClick={exportCSV}
           className="rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)]"
         >
-          Export CSV
+          Export Excel
         </button>
       </div>
 

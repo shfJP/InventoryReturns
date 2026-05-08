@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { isLoggedIn } from "@/lib/auth-session";
+import { exportRowsToCsv } from "@/lib/csv-export";
 
 type CategoryValue = {
   category: string;
@@ -103,6 +104,13 @@ export default function AssetValuesPage() {
     }
   }
 
+  function exportValues() {
+    exportRowsToCsv("asset-category-values.csv", [
+      { header: "Category", value: (item) => item.category },
+      { header: "Estimated Value", value: (item) => inputFromCents(centsFromInput(draftValues[item.category] ?? "0")) },
+    ], categories);
+  }
+
   if (loading) return <div className="text-[var(--muted)]">Loading...</div>;
 
   return (
@@ -123,6 +131,13 @@ export default function AssetValuesPage() {
           className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-50"
         >
           {saving ? "Saving" : "Save values"}
+        </button>
+        <button
+          type="button"
+          onClick={exportValues}
+          className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--text-secondary)] hover:bg-gray-100"
+        >
+          Export Excel
         </button>
       </div>
 

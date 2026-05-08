@@ -205,39 +205,41 @@ export async function syncEntraToDb(): Promise<SyncResult> {
 
     for (const item of assignedItems) {
       if (collectedAssetTags.has(item.assetTag)) continue;
-      await prisma.unresolvedCollection.upsert({
-        where: {
-          employeeId_assetTag_status: {
+      const unresolvedData = {
+        employeeName: user.displayName,
+        employeeEmail: user.email,
+        managerId: user.managerId,
+        managerEmployeeId: user.manager?.employeeId ?? null,
+        managerName: user.manager?.displayName ?? null,
+        managerEmail: user.manager?.email ?? null,
+        catName: item.catName,
+        serial: item.serial,
+        model: item.model,
+      };
+      const existing = await prisma.unresolvedCollection.findFirst({
+        where: { employeeId: user.employeeId, assetTag: item.assetTag, status: { not: "RESOLVED" } },
+        select: { id: true },
+      });
+      if (existing) {
+        await prisma.unresolvedCollection.update({ where: { id: existing.id }, data: unresolvedData });
+      } else {
+        await prisma.unresolvedCollection.upsert({
+          where: {
+            employeeId_assetTag_status: {
+              employeeId: user.employeeId,
+              assetTag: item.assetTag,
+              status: "UNRESOLVED",
+            },
+          },
+          update: unresolvedData,
+          create: {
             employeeId: user.employeeId,
             assetTag: item.assetTag,
             status: "UNRESOLVED",
+            ...unresolvedData,
           },
-        },
-        update: {
-          employeeName: user.displayName,
-          employeeEmail: user.email,
-          managerId: user.managerId,
-          managerEmployeeId: user.manager?.employeeId ?? null,
-          managerName: user.manager?.displayName ?? null,
-          managerEmail: user.manager?.email ?? null,
-          catName: item.catName,
-          serial: item.serial,
-          model: item.model,
-        },
-        create: {
-          employeeId: user.employeeId,
-          employeeName: user.displayName,
-          employeeEmail: user.email,
-          managerId: user.managerId,
-          managerEmployeeId: user.manager?.employeeId ?? null,
-          managerName: user.manager?.displayName ?? null,
-          managerEmail: user.manager?.email ?? null,
-          assetTag: item.assetTag,
-          catName: item.catName,
-          serial: item.serial,
-          model: item.model,
-        },
-      });
+        });
+      }
       unresolvedCollectionsLogged++;
     }
 

@@ -362,40 +362,41 @@ async function logUnmatchedReftabAssignment(asset: RefTabAssignment, aliases: Ma
     asset.managerEmployeeId ??
     asset.managerEmail ??
     null;
-  await prisma.unresolvedCollection.upsert({
-    where: {
-      employeeId_assetTag_status: {
-        employeeId,
-        assetTag: asset.asset_tag,
-        status: "UNRESOLVED",
-      },
-    },
-    update: {
-      employeeName: rawAssignee || "Unknown Reftab assignee",
-      employeeEmail,
-      assetTag: asset.asset_tag,
-      catName: asset.catName ?? null,
-      serial: asset.serial ?? null,
-      model: asset.title ?? asset.model ?? null,
-      managerEmployeeId,
-      managerName: asset.managerName ?? null,
-      managerEmail: asset.managerEmail ?? null,
-      source: "reftab_unmatched_assignee",
-    },
-    create: {
-      employeeId,
-      employeeName: rawAssignee || "Unknown Reftab assignee",
-      employeeEmail,
-      assetTag: asset.asset_tag,
-      catName: asset.catName ?? null,
-      serial: asset.serial ?? null,
-      model: asset.title ?? asset.model ?? null,
-      managerEmployeeId,
-      managerName: asset.managerName ?? null,
-      managerEmail: asset.managerEmail ?? null,
-      source: "reftab_unmatched_assignee",
-    },
+  const data = {
+    employeeName: rawAssignee || "Unknown Reftab assignee",
+    employeeEmail,
+    assetTag: asset.asset_tag,
+    catName: asset.catName ?? null,
+    serial: asset.serial ?? null,
+    model: asset.title ?? asset.model ?? null,
+    managerEmployeeId,
+    managerName: asset.managerName ?? null,
+    managerEmail: asset.managerEmail ?? null,
+    source: "reftab_unmatched_assignee",
+  };
+  const existing = await prisma.unresolvedCollection.findFirst({
+    where: { employeeId, assetTag: asset.asset_tag, status: { not: "RESOLVED" } },
+    select: { id: true },
   });
+  if (existing) {
+    await prisma.unresolvedCollection.update({ where: { id: existing.id }, data });
+  } else {
+    await prisma.unresolvedCollection.upsert({
+      where: {
+        employeeId_assetTag_status: {
+          employeeId,
+          assetTag: asset.asset_tag,
+          status: "UNRESOLVED",
+        },
+      },
+      update: data,
+      create: {
+        employeeId,
+        status: "UNRESOLVED",
+        ...data,
+      },
+    });
+  }
 }
 
 function addLoaneeAlias(map: Map<string, string>, id: unknown, email: string | undefined): void {

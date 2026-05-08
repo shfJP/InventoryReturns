@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
 import type { DashboardData } from "@/types/dashboard";
+import { exportRowsToCsv } from "@/lib/csv-export";
 import ContentHeader from "./ContentHeader";
 import Pagination from "./Pagination";
 
@@ -70,6 +71,16 @@ export default function DashboardAssets({ data, initialSearchQuery = "" }: { dat
     setPageSize(size);
     setPage(1);
   };
+  const exportEquipment = () => {
+    exportRowsToCsv("dashboard-equipment.csv", [
+      { header: "Asset Tag", value: (e) => e.assetTag },
+      { header: "Serial", value: (e) => e.serial },
+      { header: "Model", value: (e) => e.model },
+      { header: "Assigned To", value: (e) => staffById[e.assignedToEmployeeId]?.displayName ?? e.assignedToEmployeeId },
+      { header: "Assigned To Employee ID", value: (e) => e.assignedToEmployeeId },
+      { header: "Status", value: (e) => e.collectionStatus },
+    ], filteredEquipment);
+  };
 
   return (
     <div className="space-y-6">
@@ -87,6 +98,11 @@ export default function DashboardAssets({ data, initialSearchQuery = "" }: { dat
         onPageSizeChange={handlePageSizeChange}
         showSettingsLink={true}
       />
+      <div className="flex justify-end">
+        <button type="button" onClick={exportEquipment} className="rounded-md bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)]">
+          Export Excel
+        </button>
+      </div>
       <p className="text-sm text-[var(--muted)]">
         Signed in as {me.displayName} ({me.employeeId}). Return logistics view. · Showing {filteredEquipment.length} of {equipment.length}
       </p>

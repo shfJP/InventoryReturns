@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { isLoggedIn } from "@/lib/auth-session";
+import { exportRowsToCsv } from "@/lib/csv-export";
 
 type Event = {
   id: string;
@@ -72,6 +73,17 @@ export default function CollectionPage() {
 
   const pending = events.filter((e) => e.status === "COLLECTED_PENDING_IT");
   const closed = events.filter((e) => e.status === "CLOSED_OUT");
+  const collectionColumns = [
+    { header: "Asset Tag", value: (e: Event) => e.assetTag },
+    { header: "Serial", value: (e: Event) => e.serial },
+    { header: "Assigned To", value: (e: Event) => e.assignedToEmployeeId },
+    { header: "Marked By", value: (e: Event) => e.markedByManager },
+    { header: "Marked At", value: (e: Event) => new Date(e.markedCollectedAt).toLocaleString() },
+    { header: "Notes", value: (e: Event) => e.notes },
+    { header: "Status", value: (e: Event) => e.status },
+    { header: "Closed By", value: (e: Event) => e.closedOutBy },
+    { header: "Closed At", value: (e: Event) => e.closedOutAt ? new Date(e.closedOutAt).toLocaleString() : "" },
+  ];
 
   return (
     <div className="space-y-6">
@@ -81,7 +93,10 @@ export default function CollectionPage() {
       {pending.length > 0 && (
         <section className="overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm">
           <div className="border-b border-[var(--border)] bg-[var(--table-header-bg)] px-4 py-3">
-            <h2 className="text-lg font-semibold text-[var(--warning)]">Pending IT pickup ({pending.length})</h2>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold text-[var(--warning)]">Pending IT pickup ({pending.length})</h2>
+              <button type="button" onClick={() => exportRowsToCsv("pending-collections.csv", collectionColumns, pending)} className="rounded-md bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)]">Export Excel</button>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[600px]">
@@ -123,7 +138,10 @@ export default function CollectionPage() {
 
       <section className="overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm">
         <div className="border-b border-[var(--border)] bg-[var(--table-header-bg)] px-4 py-3">
-          <h2 className="text-lg font-semibold text-[var(--success)]">Closed out ({closed.length})</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold text-[var(--success)]">Closed out ({closed.length})</h2>
+            <button type="button" onClick={() => exportRowsToCsv("closed-collections.csv", collectionColumns, closed)} className="rounded-md bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)]">Export Excel</button>
+          </div>
         </div>
         {closed.length === 0 ? (
           <p className="p-6 text-[var(--muted)]">No closed-out events yet.</p>

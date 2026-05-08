@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { isLoggedIn } from "@/lib/auth-session";
+import { exportRowsToCsv } from "@/lib/csv-export";
 
 type TreeNode = {
   employeeId: string;
@@ -93,6 +94,10 @@ function countAll(nodes: TreeNode[]): { assigned: number; collected: number; out
   return { assigned, collected, outstanding };
 }
 
+function flattenTree(nodes: TreeNode[]): TreeNode[] {
+  return nodes.flatMap((node) => [node, ...flattenTree(node.children)]);
+}
+
 export default function CascadeReportsPage() {
   const router = useRouter();
   const [tree, setTree] = useState<TreeNode[]>([]);
@@ -141,6 +146,19 @@ export default function CascadeReportsPage() {
   if (error) return <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">{error}</div>;
 
   const totals = countAll(tree);
+  const flattenedTree = flattenTree(tree);
+  function exportHierarchy() {
+    exportRowsToCsv("cascade-reports.csv", [
+      { header: "Name", value: (row) => row.displayName },
+      { header: "Employee ID", value: (row) => row.employeeId },
+      { header: "Email", value: (row) => row.email },
+      { header: "Depth", value: (row) => row.depth },
+      { header: "Active", value: (row) => row.isActive ? "Yes" : "No" },
+      { header: "Assigned", value: (row) => row.assigned + row.collected },
+      { header: "Collected", value: (row) => row.collected },
+      { header: "Outstanding", value: (row) => row.outstanding },
+    ], flattenedTree);
+  }
 
   return (
     <div className="space-y-6">
@@ -176,6 +194,13 @@ export default function CascadeReportsPage() {
           className="rounded-md border border-[var(--border)] px-3 py-1.5 text-sm font-medium text-[var(--text-secondary)] hover:bg-gray-100"
         >
           Collapse all
+        </button>
+        <button
+          type="button"
+          onClick={exportHierarchy}
+          className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-white hover:bg-[var(--accent-hover)]"
+        >
+          Export Excel
         </button>
       </div>
 
