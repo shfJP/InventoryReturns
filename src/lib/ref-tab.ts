@@ -19,7 +19,7 @@ const ASSET_TAG_FIELD = (process.env.REF_TAB_ASSET_TAG_FIELD ?? "id").trim();
 const SERIAL_FIELD = (process.env.REF_TAB_SERIAL_FIELD ?? "serial").trim();
 const MODEL_FIELD = (process.env.REF_TAB_MODEL_FIELD ?? "title").trim();
 const REF_TAB_TIMEOUT_MS = Math.max(Number(process.env.REF_TAB_REQUEST_TIMEOUT_MS) || 30_000, 5_000);
-const REF_TAB_SYNC_SOURCE = (process.env.REF_TAB_SYNC_SOURCE ?? "assets").trim().toLowerCase();
+const REF_TAB_SYNC_SOURCE = (process.env.REF_TAB_SYNC_SOURCE ?? "loans").trim().toLowerCase();
 
 export type RefTabAssignment = {
   asset_tag: string;
@@ -58,6 +58,18 @@ type ReftabManagerInfo = {
   managerEmployeeId?: string;
   managerName?: string;
   managerEmail?: string;
+};
+
+type UserAlias = {
+  id: string;
+  employeeId: string;
+  displayName: string;
+  email: string;
+  isActive: boolean;
+  managerId: string | null;
+  managerEmployeeId: string | null;
+  managerName: string | null;
+  managerEmail: string | null;
 };
 
 /** Sign a Reftab API request (same rules as official ReftabNode). */
@@ -222,6 +234,78 @@ function compactDetails(details: Record<string, string | undefined>): Record<str
   );
 }
 
+function normalizedStatusText(value: string | null | undefined): string {
+  return value?.trim().toLowerCase().replace(/[_-]+/g, " ") ?? "";
+}
+
+function firstStatus(record: Record<string, unknown>, paths: string[]): string | undefined {
+  return firstString(record, paths);
+}
+
+function hasReturnMarker(record: Record<string, unknown>): boolean {
+  return Boolean(firstString(record, [
+    "returnedAt",
+    "returned_at",
+    "returnDate",
+    "return_date",
+    "checkedInAt",
+    "checked_in_at",
+    "dateReturned",
+    "date_returned",
+    "loan.returnedAt",
+    "loan.returnDate",
+    "loan.checkedInAt",
+  ]));
+}
+
+function isInactiveLoanStatus(status: string | undefined): boolean {
+  const text = normalizedStatusText(status);
+  if (!text) return false;
+  return [
+    "available",
+    "checked in",
+    "check in",
+    "closed",
+    "complete",
+    "completed",
+    "in stock",
+    "returned",
+    "return",
+  ].some((value) => text === value || text.includes(value));
+}
+
+function isActiveLoanStatus(status: string | undefined): boolean {
+  const text = normalizedStatusText(status);
+  if (!text) return false;
+  return [
+    "assigned",
+    "borrowed",
+    "checked out",
+    "check out",
+    "loaned",
+    "on loan",
+    "out",
+  ].some((value) => text === value || text.includes(value));
+}
+
+function isCurrentLoanRecord(record: Record<string, unknown>): boolean {
+  if (hasReturnMarker(record)) return false;
+  const status = firstStatus(record, ["status", "loan.status", "statusName", "loan.statusName"]);
+  if (isInactiveLoanStatus(status)) return false;
+  if (isActiveLoanStatus(status)) return true;
+  return true;
+}
+
+function isCurrentLoanAsset(record: Record<string, unknown>): boolean {
+  if (hasReturnMarker(record)) return false;
+  const loanStatus = firstStatus(record, ["loan.status", "loan.statusName"]);
+  if (isInactiveLoanStatus(loanStatus)) return false;
+  if (isActiveLoanStatus(loanStatus)) return true;
+  const assetStatus = firstStatus(record, ["statusName", "status.name", "status", "asset.statusName", "asset.status.name"]);
+  if (isInactiveLoanStatus(assetStatus)) return false;
+  return true;
+}
+
 function assetDetails(record: Record<string, unknown>): {
   aid?: string;
   assetTag?: string;
@@ -334,39 +418,75 @@ function normalizeKey(value: string | null | undefined): string | null {
   return normalized ? normalized : null;
 }
 
-async function buildUserAliasMap(): Promise<Map<string, string>> {
+async function buildUserAliasMap(): Promise<Map<string, UserAlias>> {
   const users = await prisma.user.findMany({
-    select: { employeeId: true, email: true, upn: true },
+    select: {
+      employeeId: true,
+      id: true,
+      displayName: true,
+      email: true,
+      upn: true,
+      isActive: true,
+      managerId: true,
+      manager: {
+        select: {
+          employeeId: true,
+          displayName: true,
+          email: true,
+        },
+      },
+    },
   });
-  const aliases = new Map<string, string>();
+  const aliases = new Map<string, UserAlias>();
   for (const user of users) {
+    const alias = {
+      id: user.id,
+      employeeId: user.employeeId,
+      displayName: user.displayName,
+      email: user.email,
+      isActive: user.isActive,
+      managerId: user.managerId,
+      managerEmployeeId: user.manager?.employeeId ?? null,
+      managerName: user.manager?.displayName ?? null,
+      managerEmail: user.manager?.email ?? null,
+    };
     for (const value of [user.employeeId, user.email, user.upn]) {
       const key = normalizeKey(value);
-      if (key) aliases.set(key, user.employeeId);
+      if (!key) continue;
+      const existing = aliases.get(key);
+      if (!existing || (!existing.isActive && alias.isActive)) {
+        aliases.set(key, alias);
+      }
     }
   }
   return aliases;
 }
 
-function resolveAssigneeEmployeeId(rawAssignee: string, aliases: Map<string, string>): string | null {
+function resolveAssigneeUser(rawAssignee: string, aliases: Map<string, UserAlias>): UserAlias | null {
   return aliases.get(normalizeKey(rawAssignee) ?? "") ?? null;
 }
 
-async function logUnmatchedReftabAssignment(asset: RefTabAssignment, aliases: Map<string, string>): Promise<void> {
+function resolveAssigneeEmployeeId(rawAssignee: string, aliases: Map<string, UserAlias>): string | null {
+  return resolveAssigneeUser(rawAssignee, aliases)?.employeeId ?? null;
+}
+
+async function logUnresolvedReftabAssignment(asset: RefTabAssignment, aliases: Map<string, UserAlias>, matchedUser?: UserAlias | null): Promise<void> {
   const rawAssignee = asset.assigned_to_employee_id.trim();
-  const employeeId = rawAssignee || `unmatched:${asset.asset_tag}`;
-  const employeeEmail = rawAssignee.includes("@") ? rawAssignee : null;
-  const managerEmployeeId = resolveAssigneeEmployeeId(asset.managerEmployeeId ?? "", aliases) ?? resolveAssigneeEmployeeId(asset.managerEmail ?? "", aliases);
+  const employeeId = matchedUser?.employeeId ?? (rawAssignee || `unmatched:${asset.asset_tag}`);
+  const employeeEmail = matchedUser?.email ?? (rawAssignee.includes("@") ? rawAssignee : null);
+  const managerUser = resolveAssigneeUser(asset.managerEmployeeId ?? "", aliases) ?? resolveAssigneeUser(asset.managerEmail ?? "", aliases);
+  const activeManager = managerUser?.isActive ? managerUser : null;
   const data = {
-    employeeName: rawAssignee || "Unknown Reftab assignee",
+    employeeName: matchedUser?.displayName ?? (rawAssignee || "Unknown Reftab assignee"),
     employeeEmail,
     assetTag: asset.asset_tag,
     catName: asset.catName ?? null,
     serial: asset.serial ?? null,
     model: asset.title ?? asset.model ?? null,
-    managerEmployeeId,
-    managerName: asset.managerName ?? asset.managerEmployeeId ?? null,
-    managerEmail: asset.managerEmail ?? null,
+    managerId: matchedUser?.managerId ?? activeManager?.id ?? null,
+    managerEmployeeId: matchedUser?.managerEmployeeId ?? activeManager?.employeeId ?? null,
+    managerName: matchedUser?.managerName ?? activeManager?.displayName ?? asset.managerName ?? asset.managerEmployeeId ?? null,
+    managerEmail: matchedUser?.managerEmail ?? activeManager?.email ?? asset.managerEmail ?? null,
     source: "reftab_unmatched_assignee",
   };
   const existing = await prisma.unresolvedCollection.findFirst({
@@ -693,8 +813,13 @@ async function fetchAllReftabLoans(): Promise<RefTabAssignment[]> {
 
   let skippedMissingAssignee = 0;
   let skippedMissingAsset = 0;
+  let skippedInactive = 0;
   const out: RefTabAssignment[] = [];
   for (const loan of allLoans) {
+    if (!isCurrentLoanRecord(loan)) {
+      skippedInactive++;
+      continue;
+    }
     const assignee = getLoanAssignee(loan, loaneeMaps);
     if (!assignee) {
       skippedMissingAssignee++;
@@ -709,7 +834,7 @@ async function fetchAllReftabLoans(): Promise<RefTabAssignment[]> {
     if (out.length === before) skippedMissingAsset++;
   }
 
-  console.info(`[reftab] Fetched ${allLoans.length} loan(s); mapped ${out.length} checked-out asset assignment(s); skippedMissingAssignee=${skippedMissingAssignee}; skippedMissingAsset=${skippedMissingAsset}.`);
+  console.info(`[reftab] Fetched ${allLoans.length} loan(s); mapped ${out.length} checked-out asset assignment(s); skippedInactive=${skippedInactive}; skippedMissingAssignee=${skippedMissingAssignee}; skippedMissingAsset=${skippedMissingAsset}.`);
   return out;
 }
 
@@ -761,8 +886,13 @@ async function fetchAllReftabAssets(): Promise<RefTabAssignment[]> {
   }
 
   let skippedMissingAssignee = 0;
+  let skippedInactive = 0;
   const out: RefTabAssignment[] = [];
   for (const asset of allAssets) {
+    if (!isCurrentLoanAsset(asset)) {
+      skippedInactive++;
+      continue;
+    }
     const match = resolveReftabAssigneeFromRecord(asset, loaneeMaps);
     if (!match) {
       skippedMissingAssignee++;
@@ -795,7 +925,7 @@ async function fetchAllReftabAssets(): Promise<RefTabAssignment[]> {
       status: details.statusName,
     });
   }
-  console.info(`[reftab] Fetched ${allAssets.length} checked-out asset(s); ${out.length} had a usable asset tag and loanee; skippedMissingAssignee=${skippedMissingAssignee}.`);
+  console.info(`[reftab] Fetched ${allAssets.length} checked-out asset(s); ${out.length} had a usable asset tag and loanee; skippedInactive=${skippedInactive}; skippedMissingAssignee=${skippedMissingAssignee}.`);
   return out;
 }
 
@@ -855,23 +985,25 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
   const currentAssignmentKeys = new Set<string>();
 
   for (const asset of assets) {
-    const resolvedEmployeeId = resolveAssigneeEmployeeId(asset.assigned_to_employee_id, userAliases);
-    if (resolvedEmployeeId) currentAssignmentKeys.add(`${asset.asset_tag}-${resolvedEmployeeId}`);
+    const resolvedUser = resolveAssigneeUser(asset.assigned_to_employee_id, userAliases);
+    const resolvedEmployeeId = resolvedUser?.employeeId ?? null;
+    if (resolvedEmployeeId && resolvedUser?.isActive) currentAssignmentKeys.add(`${asset.asset_tag}-${resolvedEmployeeId}`);
 
     if (collectedAssetTags.includes(asset.asset_tag)) {
       skippedCollected++;
       continue;
     }
 
-    if (!resolvedEmployeeId) {
+    if (!resolvedUser || !resolvedUser.isActive) {
       skippedUnmatchedAssignee++;
-      await logUnmatchedReftabAssignment(asset, userAliases);
+      await logUnresolvedReftabAssignment(asset, userAliases, resolvedUser);
       unmatchedLogged++;
-      console.warn(`[reftab] Skipping asset ${asset.asset_tag}: assignee "${asset.assigned_to_employee_id}" does not match any local user employeeId, email, or UPN.`);
+      console.warn(`[reftab] Logging asset ${asset.asset_tag} as unresolved: assignee "${asset.assigned_to_employee_id}" does not match an active Entra user.`);
       continue;
     }
 
-    const key = `${asset.asset_tag}-${resolvedEmployeeId}`;
+    const activeEmployeeId = resolvedUser.employeeId;
+    const key = `${asset.asset_tag}-${activeEmployeeId}`;
     if (collectedSet.has(key)) {
       skippedCollected++;
       continue;
@@ -881,7 +1013,7 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
       where: {
         assetTag_assignedToEmployeeId: {
           assetTag: asset.asset_tag,
-          assignedToEmployeeId: resolvedEmployeeId,
+          assignedToEmployeeId: activeEmployeeId,
         },
       },
       update: {
@@ -893,7 +1025,7 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
         locationName: asset.locationName ?? null,
         statusName: asset.statusName ?? asset.status ?? null,
         detailsJson: asset.details ? JSON.stringify(asset.details) : null,
-        assignedToEmployeeId: resolvedEmployeeId,
+        assignedToEmployeeId: activeEmployeeId,
         lastSyncedAt: now,
       },
       create: {
@@ -906,7 +1038,7 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
         locationName: asset.locationName ?? null,
         statusName: asset.statusName ?? asset.status ?? null,
         detailsJson: asset.details ? JSON.stringify(asset.details) : null,
-        assignedToEmployeeId: resolvedEmployeeId,
+        assignedToEmployeeId: activeEmployeeId,
         source: "ref_tab",
         lastSyncedAt: now,
       },
