@@ -73,11 +73,7 @@ function dollarsFromCents(cents: number) {
 }
 
 function hasKnownManager(item: UnresolvedCollection) {
-  return Boolean(
-    item.managerEmployeeId?.trim() ||
-    item.managerEmail?.trim() ||
-    (item.managerName?.trim() && item.managerName.trim().toLowerCase() !== "unknown")
-  );
+  return Boolean(item.managerEmployeeId?.trim());
 }
 
 type SortDirection = "asc" | "desc";

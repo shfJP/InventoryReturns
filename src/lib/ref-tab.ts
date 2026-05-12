@@ -356,12 +356,7 @@ async function logUnmatchedReftabAssignment(asset: RefTabAssignment, aliases: Ma
   const rawAssignee = asset.assigned_to_employee_id.trim();
   const employeeId = rawAssignee || `unmatched:${asset.asset_tag}`;
   const employeeEmail = rawAssignee.includes("@") ? rawAssignee : null;
-  const managerEmployeeId =
-    resolveAssigneeEmployeeId(asset.managerEmployeeId ?? "", aliases) ??
-    resolveAssigneeEmployeeId(asset.managerEmail ?? "", aliases) ??
-    asset.managerEmployeeId ??
-    asset.managerEmail ??
-    null;
+  const managerEmployeeId = resolveAssigneeEmployeeId(asset.managerEmployeeId ?? "", aliases) ?? resolveAssigneeEmployeeId(asset.managerEmail ?? "", aliases);
   const data = {
     employeeName: rawAssignee || "Unknown Reftab assignee",
     employeeEmail,
@@ -370,7 +365,7 @@ async function logUnmatchedReftabAssignment(asset: RefTabAssignment, aliases: Ma
     serial: asset.serial ?? null,
     model: asset.title ?? asset.model ?? null,
     managerEmployeeId,
-    managerName: asset.managerName ?? null,
+    managerName: asset.managerName ?? asset.managerEmployeeId ?? null,
     managerEmail: asset.managerEmail ?? null,
     source: "reftab_unmatched_assignee",
   };
@@ -808,6 +803,7 @@ export type ReftabSyncResult = {
   upserted: number;
   skippedCollected: number;
   skippedUnmatchedAssignee: number;
+  unmatchedLogged: number;
   staleAssignmentsRemoved: number;
   staleUnresolvedResolved: number;
   total: number;
@@ -829,6 +825,7 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
   let upserted = 0;
   let skippedCollected = 0;
   let skippedUnmatchedAssignee = 0;
+  let unmatchedLogged = 0;
   let staleAssignmentsRemoved = 0;
   let staleUnresolvedResolved = 0;
 
@@ -869,6 +866,7 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
     if (!resolvedEmployeeId) {
       skippedUnmatchedAssignee++;
       await logUnmatchedReftabAssignment(asset, userAliases);
+      unmatchedLogged++;
       console.warn(`[reftab] Skipping asset ${asset.asset_tag}: assignee "${asset.assigned_to_employee_id}" does not match any local user employeeId, email, or UPN.`);
       continue;
     }
@@ -959,8 +957,8 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
     }
   }
 
-  const result = { upserted, skippedCollected, skippedUnmatchedAssignee, staleAssignmentsRemoved, staleUnresolvedResolved, total: assets.length };
-  console.info(`[reftab] Sync complete: total=${result.total}, upserted=${result.upserted}, skippedCollected=${result.skippedCollected}, skippedUnmatchedAssignee=${result.skippedUnmatchedAssignee}, staleAssignmentsRemoved=${result.staleAssignmentsRemoved}, staleUnresolvedResolved=${result.staleUnresolvedResolved}.`);
+  const result = { upserted, skippedCollected, skippedUnmatchedAssignee, unmatchedLogged, staleAssignmentsRemoved, staleUnresolvedResolved, total: assets.length };
+  console.info(`[reftab] Sync complete: total=${result.total}, upserted=${result.upserted}, skippedCollected=${result.skippedCollected}, skippedUnmatchedAssignee=${result.skippedUnmatchedAssignee}, unmatchedLogged=${result.unmatchedLogged}, staleAssignmentsRemoved=${result.staleAssignmentsRemoved}, staleUnresolvedResolved=${result.staleUnresolvedResolved}.`);
   return result;
 }
 
