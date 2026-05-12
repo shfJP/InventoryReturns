@@ -15,6 +15,7 @@ export type SyncRunStatus = {
 
 const SYNC_STATUS_PREFIX = "syncStatus:";
 const SYNC_DAEMON_KEY = "syncDaemon";
+const STALE_RUNNING_SYNC_MS = 2 * 60 * 60 * 1000;
 
 export type SyncDaemonStatus = {
   startedAt: string | null;
@@ -41,14 +42,32 @@ function parseStatus(source: SyncSource, value: string | null | undefined): Sync
   if (!value) return defaultStatus(source);
   try {
     const parsed = JSON.parse(value) as Partial<SyncRunStatus>;
-    return {
+    const status = {
       ...defaultStatus(source),
       ...parsed,
       source,
     };
+    if (isStaleRunningStatus(status)) {
+      return {
+        ...status,
+        state: "error",
+        lastFinishedAt: status.lastFinishedAt ?? new Date().toISOString(),
+        lastError: "Sync did not finish cleanly and was marked stale.",
+      };
+    }
+    return status;
   } catch {
     return defaultStatus(source);
   }
+}
+
+function isStaleRunningStatus(status: SyncRunStatus): boolean {
+  if (status.state !== "running" || !status.lastStartedAt) return false;
+
+  const lastStartedAt = new Date(status.lastStartedAt).getTime();
+  if (!Number.isFinite(lastStartedAt)) return false;
+
+  return Date.now() - lastStartedAt > STALE_RUNNING_SYNC_MS;
 }
 
 async function saveStatus(source: SyncSource, status: SyncRunStatus): Promise<SyncRunStatus> {
