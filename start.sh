@@ -41,6 +41,13 @@ fi
 
 echo "==> Starting background sync worker..."
 npx tsx scripts/sync-daemon.ts 2>&1 &
+SYNC_DAEMON_PID=$!
+sleep 2
+if kill -0 "$SYNC_DAEMON_PID" 2>/dev/null; then
+  echo "==> Background sync worker running as PID ${SYNC_DAEMON_PID}."
+else
+  echo "==> Background sync worker exited during startup. Check logs above for the sync-daemon error."
+fi
 
 echo "==> Starting Next.js..."
 export PORT="${PORT:-3000}"

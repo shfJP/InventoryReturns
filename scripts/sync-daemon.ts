@@ -2,7 +2,7 @@ import { syncEntraToDb } from "../src/lib/entra";
 import { syncNinjaOneToDb } from "../src/lib/ninjaone";
 import { syncReftabToDb } from "../src/lib/ref-tab";
 import { getSyncSettings } from "../src/lib/sync-settings";
-import { markSyncFailed, markSyncFinished, markSyncStarted } from "../src/lib/sync-status";
+import { markSyncDaemonHeartbeat, markSyncFailed, markSyncFinished, markSyncStarted } from "../src/lib/sync-status";
 import { prisma } from "../src/lib/db";
 
 let entraRunning = false;
@@ -83,7 +83,9 @@ async function runNinjaOneSync(reason: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const startedAt = new Date().toISOString();
   console.info("[sync] Background sync worker started.");
+  await markSyncDaemonHeartbeat(startedAt);
 
   const initialSettings = await getSyncSettings();
   if (initialSettings.autoSyncOnStartup) {
@@ -97,6 +99,7 @@ async function main(): Promise<void> {
 
   while (true) {
     await sleep(60_000);
+    await markSyncDaemonHeartbeat(startedAt);
     const settings = await getSyncSettings();
     if (!settings.cronEnabled) continue;
 

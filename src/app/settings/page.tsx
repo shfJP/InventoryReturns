@@ -34,6 +34,11 @@ type SyncStatusResponse = {
   entra?: SyncRunStatus;
   reftab?: SyncRunStatus;
   ninjaone?: SyncRunStatus;
+  daemon?: {
+    startedAt: string | null;
+    lastHeartbeatAt: string | null;
+    pid: number | null;
+  };
 };
 
 export default function SettingsPage() {
@@ -162,6 +167,7 @@ export default function SettingsPage() {
 
           <div className="mt-4 space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
+              <SyncDaemonCard status={syncStatus?.daemon} />
               <SyncStatusCard label="Entra" status={syncStatus?.entra} />
               <SyncStatusCard label="Reftab" status={syncStatus?.reftab} />
               <SyncStatusCard label="NinjaOne" status={syncStatus?.ninjaone} />
@@ -298,6 +304,35 @@ function SyncStatusCard({ label, status }: { label: string; status: SyncRunStatu
         <div>
           <dt className="font-medium text-[var(--muted)]">Last error</dt>
           <dd className="break-words text-[var(--text)]">{status?.lastError ?? "None"}</dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
+function SyncDaemonCard({ status }: { status: SyncStatusResponse["daemon"] | undefined }) {
+  const heartbeatTime = status?.lastHeartbeatAt ? new Date(status.lastHeartbeatAt).getTime() : 0;
+  const isAlive = heartbeatTime > 0 && Date.now() - heartbeatTime < 180_000;
+  return (
+    <div className="rounded-lg border border-[var(--border)] p-3">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-[var(--text)]">Background worker</h3>
+        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${isAlive ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"}`}>
+          {isAlive ? "alive" : "not detected"}
+        </span>
+      </div>
+      <dl className="mt-3 space-y-2 text-xs">
+        <div>
+          <dt className="font-medium text-[var(--muted)]">Started</dt>
+          <dd className="text-[var(--text)]">{formatDate(status?.startedAt)}</dd>
+        </div>
+        <div>
+          <dt className="font-medium text-[var(--muted)]">Last heartbeat</dt>
+          <dd className="text-[var(--text)]">{formatDate(status?.lastHeartbeatAt)}</dd>
+        </div>
+        <div>
+          <dt className="font-medium text-[var(--muted)]">Process ID</dt>
+          <dd className="text-[var(--text)]">{status?.pid ?? "Not available"}</dd>
         </div>
       </dl>
     </div>

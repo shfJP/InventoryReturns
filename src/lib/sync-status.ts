@@ -13,6 +13,13 @@ export type SyncRunStatus = {
 };
 
 const SYNC_STATUS_PREFIX = "syncStatus:";
+const SYNC_DAEMON_KEY = "syncDaemon";
+
+export type SyncDaemonStatus = {
+  startedAt: string | null;
+  lastHeartbeatAt: string | null;
+  pid: number | null;
+};
 
 function statusKey(source: SyncSource): string {
   return `${SYNC_STATUS_PREFIX}${source}`;
@@ -98,4 +105,33 @@ export async function markSyncFailed(source: SyncSource, error: unknown): Promis
     lastFinishedAt: new Date().toISOString(),
     lastError: error instanceof Error ? error.message : String(error),
   });
+}
+
+export async function markSyncDaemonHeartbeat(startedAt: string): Promise<SyncDaemonStatus> {
+  const status: SyncDaemonStatus = {
+    startedAt,
+    lastHeartbeatAt: new Date().toISOString(),
+    pid: process.pid,
+  };
+  await prisma.appSetting.upsert({
+    where: { key: SYNC_DAEMON_KEY },
+    update: { value: JSON.stringify(status) },
+    create: { key: SYNC_DAEMON_KEY, value: JSON.stringify(status) },
+  });
+  return status;
+}
+
+export async function getSyncDaemonStatus(): Promise<SyncDaemonStatus> {
+  const row = await prisma.appSetting.findUnique({ where: { key: SYNC_DAEMON_KEY } });
+  if (!row) return { startedAt: null, lastHeartbeatAt: null, pid: null };
+  try {
+    const parsed = JSON.parse(row.value) as Partial<SyncDaemonStatus>;
+    return {
+      startedAt: parsed.startedAt ?? null,
+      lastHeartbeatAt: parsed.lastHeartbeatAt ?? null,
+      pid: parsed.pid ?? null,
+    };
+  } catch {
+    return { startedAt: null, lastHeartbeatAt: null, pid: null };
+  }
 }
