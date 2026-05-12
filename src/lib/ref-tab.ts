@@ -470,9 +470,18 @@ function resolveAssigneeEmployeeId(rawAssignee: string, aliases: Map<string, Use
   return resolveAssigneeUser(rawAssignee, aliases)?.employeeId ?? null;
 }
 
-async function logUnresolvedReftabAssignment(asset: RefTabAssignment, aliases: Map<string, UserAlias>, matchedUser?: UserAlias | null): Promise<void> {
+function unresolvedAssignmentKey(employeeId: string, assetTag: string): string {
+  return `${employeeId}\u0000${assetTag}`;
+}
+
+function unresolvedEmployeeIdForReftabAssignment(asset: RefTabAssignment, matchedUser?: UserAlias | null): string {
   const rawAssignee = asset.assigned_to_employee_id.trim();
-  const employeeId = matchedUser?.employeeId ?? (rawAssignee || `unmatched:${asset.asset_tag}`);
+  return matchedUser?.employeeId ?? (rawAssignee || `unmatched:${asset.asset_tag}`);
+}
+
+async function logUnresolvedReftabAssignment(asset: RefTabAssignment, aliases: Map<string, UserAlias>, matchedUser?: UserAlias | null): Promise<string> {
+  const rawAssignee = asset.assigned_to_employee_id.trim();
+  const employeeId = unresolvedEmployeeIdForReftabAssignment(asset, matchedUser);
   const employeeEmail = matchedUser?.email ?? (rawAssignee.includes("@") ? rawAssignee : null);
   const managerUser = resolveAssigneeUser(asset.managerEmployeeId ?? "", aliases) ?? resolveAssigneeUser(asset.managerEmail ?? "", aliases);
   const activeManager = managerUser?.isActive ? managerUser : null;
@@ -512,6 +521,7 @@ async function logUnresolvedReftabAssignment(asset: RefTabAssignment, aliases: M
       },
     });
   }
+  return unresolvedAssignmentKey(employeeId, asset.asset_tag);
 }
 
 function addLoaneeAlias(map: Map<string, string>, id: unknown, email: string | undefined): void {
@@ -958,6 +968,7 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
   let unmatchedLogged = 0;
   let staleAssignmentsRemoved = 0;
   let staleUnresolvedResolved = 0;
+  const currentUnresolvedKeys = new Set<string>();
 
   // Get all collected asset+employee combinations
   const collectedEvents = await prisma.collectionEvent.findMany({
@@ -996,7 +1007,7 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
 
     if (!resolvedUser || !resolvedUser.isActive) {
       skippedUnmatchedAssignee++;
-      await logUnresolvedReftabAssignment(asset, userAliases, resolvedUser);
+      currentUnresolvedKeys.add(await logUnresolvedReftabAssignment(asset, userAliases, resolvedUser));
       unmatchedLogged++;
       console.warn(`[reftab] Logging asset ${asset.asset_tag} as unresolved: assignee "${asset.assigned_to_employee_id}" does not match an active Entra user.`);
       continue;
@@ -1065,11 +1076,10 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
       where: {
         status: { not: "RESOLVED" },
       },
-      select: { id: true, assetTag: true },
+      select: { id: true, employeeId: true, assetTag: true },
     });
-    const currentAssetTagSet = new Set(currentAssetTags);
     const staleUnresolvedIds = staleUnresolved
-      .filter((item) => !currentAssetTagSet.has(item.assetTag))
+      .filter((item) => !currentUnresolvedKeys.has(unresolvedAssignmentKey(item.employeeId, item.assetTag)))
       .map((item) => item.id);
     for (let i = 0; i < staleUnresolvedIds.length; i += 500) {
       const ids = staleUnresolvedIds.slice(i, i + 500);
@@ -1083,7 +1093,7 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
           unresolvedCollectionId: id,
           action: "AUTO_RESOLVED_REFTAB_SYNC",
           newStatus: "RESOLVED",
-          note: "Resolved automatically because the asset no longer appears in Reftab checked-out assignments.",
+          note: "Resolved automatically because the asset no longer appears as a current Reftab loan assigned to a disabled or missing Entra user.",
         })),
       });
     }
