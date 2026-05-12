@@ -22,9 +22,9 @@ The deliverable document also describes capabilities outside the web UI (APIs, d
 
 **API & app:** Yes. The Next.js app and all API routes (`/api/me`, `/api/staff`, `/api/equipment`, `/api/collect`, `/api/collection`, `/api/closeout`) are implemented and run as soon as the app starts.
 
-**Coolify / Nixpacks:** Yes. The repo includes `nixpacks.toml`; Coolify can build with Nixpacks (or use the Dockerfile). Build runs `npm ci`, `prisma generate`, `npm run build`; start runs `npm run start`. You must run the database schema once before the app is usable: run `npx prisma db push` (and optionally `npm run db:seed`) either in a one-off job after first deploy, or add a release/init step in your pipeline. Set all env vars from `.env.example` in Coolify.
+**Coolify / Nixpacks:** Yes. The repo includes `nixpacks.toml`; Coolify can build with Nixpacks (or use the Dockerfile). Build runs `npm ci`, `prisma generate`, `npm run build`; start runs `sh start.sh`, which pushes the Prisma schema and starts the background sync worker. Set all env vars from `.env.example` in Coolify.
 
-**Docker:** Yes. The `Dockerfile` builds a standalone image and runs `node server.js`. Use **Postgres** in production (`DATABASE_URL=postgresql://...`); run `prisma db push` or `prisma migrate deploy` when the DB is available. For **SQLite** in Docker you need a writable volume for the DB file and must run `prisma db push` (and optionally seed) inside the container or in an init job.
+**Docker:** Yes. The `Dockerfile` builds a standalone image and runs `sh start.sh`. Use **PostgreSQL** (`DATABASE_URL=postgresql://...`). The startup script runs `prisma db push` when the DB is available.
 
 ### Coolify / production: env vars for pilot auth and “Mark collected”
 
@@ -60,7 +60,7 @@ Once you set env vars (from `.env.example`) and run the app with a migrated (and
 
 ```bash
 cp .env.example .env
-# Edit .env: set DATABASE_URL (default file:./dev.db for SQLite)
+# Edit .env: set DATABASE_URL to PostgreSQL
 npm install
 npx prisma db push
 npm run db:seed
@@ -77,10 +77,9 @@ Open http://localhost:3000. Pilot auth uses `CURRENT_USER_EMPLOYEE_ID` (or first
 
 ### 1) **Database**
 
-- **What:** SQLite (pilot) or PostgreSQL (production).
+- **What:** PostgreSQL.
 - **Env:** `DATABASE_URL`
-  - SQLite: `file:./dev.db`
-  - Postgres: `postgresql://user:pass@host:5432/dbname`
+  - Example: `postgresql://user:pass@host:5432/dbname?schema=public`
 - **Usage:** Users (AD/Entra sync), equipment cache, collection events. No external API; app owns the DB.
 
 ---
@@ -149,8 +148,7 @@ Exactly one channel is used, driven by `NOTIFICATION_PROVIDER` and the correspon
 - **Build:** Nixpacks (or Docker) uses `npm ci`, `prisma generate`, `npm run build`. The build does **not** need an existing database.
 - **Start:** The startup script (`start.sh`) **automatically** runs `prisma db push` (creates/syncs tables) and seeds pilot data (if the User table is empty) before starting Next.js. No manual DB setup is needed.
 - **Env:** Set all variables from `.env.example` in Coolify (or your platform). For production, set `DATABASE_URL` to a Postgres URL.
-- **SQLite:** For pilot, `DATABASE_URL=file:./dev.db` works; ensure the app has write access to the path. For production, prefer Postgres.
-- **Data persistence (SQLite + Docker):** The SQLite file lives inside the container. To persist across redeploys, mount a volume for the DB path (e.g. `-v /data:/app/data` with `DATABASE_URL=file:./data/portal.db`). Postgres does not have this issue.
+- **Database:** Set `DATABASE_URL` to the internal PostgreSQL connection string from Coolify. This deployment no longer defaults to SQLite.
 
 ---
 

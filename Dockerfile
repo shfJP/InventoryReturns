@@ -17,7 +17,6 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
-RUN mkdir -p /data && chown nextjs:nodejs /data
 
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
@@ -33,8 +32,6 @@ RUN npm install --omit=dev prisma tsx @prisma/client
 
 USER nextjs
 EXPOSE 3000
-VOLUME ["/data"]
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
-ENV DATABASE_URL="file:/data/dev.db"
 CMD ["sh", "start.sh"]

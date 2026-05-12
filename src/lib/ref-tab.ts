@@ -934,12 +934,15 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
     const staleUnresolved = await prisma.unresolvedCollection.findMany({
       where: {
         status: { not: "RESOLVED" },
-        assetTag: { notIn: currentAssetTags },
       },
-      select: { id: true },
+      select: { id: true, assetTag: true },
     });
-    for (let i = 0; i < staleUnresolved.length; i += 500) {
-      const ids = staleUnresolved.slice(i, i + 500).map((item) => item.id);
+    const currentAssetTagSet = new Set(currentAssetTags);
+    const staleUnresolvedIds = staleUnresolved
+      .filter((item) => !currentAssetTagSet.has(item.assetTag))
+      .map((item) => item.id);
+    for (let i = 0; i < staleUnresolvedIds.length; i += 500) {
+      const ids = staleUnresolvedIds.slice(i, i + 500);
       const result = await prisma.unresolvedCollection.updateMany({
         where: { id: { in: ids } },
         data: { status: "RESOLVED", resolvedAt: now },

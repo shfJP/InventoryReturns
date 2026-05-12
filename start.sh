@@ -1,13 +1,9 @@
 #!/bin/sh
 set -e
 
-if [ -z "${DATABASE_URL:-}" ] || [ "$DATABASE_URL" = "file:./dev.db" ] || [ "$DATABASE_URL" = "file:dev.db" ]; then
-  if mkdir -p /data 2>/dev/null; then
-    export DATABASE_URL="file:/data/dev.db"
-  else
-    mkdir -p "$PWD/prisma"
-    export DATABASE_URL="file:$PWD/prisma/dev.db"
-  fi
+if [ -z "${DATABASE_URL:-}" ]; then
+  echo "DATABASE_URL is required. Set it to your PostgreSQL connection string."
+  exit 1
 fi
 
 echo "==> Using DATABASE_URL=${DATABASE_URL}"
