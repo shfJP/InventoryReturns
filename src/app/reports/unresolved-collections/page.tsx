@@ -20,6 +20,18 @@ type UnresolvedCollection = {
   model: string | null;
   source: string;
   investigationNotes: string | null;
+  ninjaOneMatches: Array<{
+    id: string;
+    displayName: string | null;
+    systemName: string | null;
+    dnsName: string | null;
+    netbiosName: string | null;
+    likelyUser: string | null;
+    offline: boolean | null;
+    lastContact: string | null;
+    lastUpdate: string | null;
+    matchReason: string;
+  }>;
   auditEvents: Array<{
     id: string;
     action: string;
@@ -47,7 +59,7 @@ type UnresolvedResponse = {
 };
 
 function normalizeItem(item: UnresolvedCollection): UnresolvedCollection {
-  return { ...item, auditEvents: item.auditEvents ?? [] };
+  return { ...item, auditEvents: item.auditEvents ?? [], ninjaOneMatches: item.ninjaOneMatches ?? [] };
 }
 
 function dollarsFromCents(cents: number) {
@@ -67,8 +79,22 @@ function hasKnownManager(item: UnresolvedCollection) {
   );
 }
 
+function formatDisplayName(name: string | null | undefined) {
+  const trimmed = name?.trim().replace(/\s+/g, " ");
+  if (!trimmed) return "";
+  const [last, ...rest] = trimmed.split(",");
+  if (rest.length === 0) return trimmed;
+  const first = rest.join(",").trim().replace(/\s+/g, " ");
+  return first ? `${first} ${last.trim()}` : trimmed;
+}
+
+function firstNameOnly(name: string | null | undefined) {
+  const displayName = formatDisplayName(name);
+  return displayName.split(/\s+/)[0] || "Manager";
+}
+
 type SortDirection = "asc" | "desc";
-type UnresolvedSortKey = "employee" | "manager" | "assetTag" | "catName" | "serial" | "model" | "detectedAt" | "status" | "investigationNotes";
+type UnresolvedSortKey = "employee" | "manager" | "assetTag" | "catName" | "serial" | "model" | "ninjaOne" | "detectedAt" | "status" | "investigationNotes";
 
 const unresolvedColumns: Array<{ key: UnresolvedSortKey; label: string }> = [
   { key: "employee", label: "Employee" },
@@ -77,6 +103,7 @@ const unresolvedColumns: Array<{ key: UnresolvedSortKey; label: string }> = [
   { key: "catName", label: "Category" },
   { key: "serial", label: "Serial" },
   { key: "model", label: "Model" },
+  { key: "ninjaOne", label: "NinjaOne Device" },
   { key: "detectedAt", label: "Detected" },
   { key: "status", label: "Status" },
   { key: "investigationNotes", label: "Notes" },
@@ -95,21 +122,42 @@ function investigationStatusLabel(statusValue: string) {
   return investigationStatuses.find((status) => status.value === statusValue)?.label ?? statusValue;
 }
 
+function ninjaOneSummary(item: UnresolvedCollection) {
+  const match = item.ninjaOneMatches[0];
+  if (!match) return "";
+  const deviceName = match.displayName ?? match.systemName ?? match.netbiosName ?? match.dnsName ?? match.id;
+  const user = match.likelyUser ? `; user: ${match.likelyUser}` : "";
+  const contact = match.lastContact ? `; last contact: ${formatNinjaTimestamp(match.lastContact)}` : "";
+  return `${deviceName}${user}${contact}`;
+}
+
+function formatNinjaTimestamp(value: string | null | undefined) {
+  if (!value) return "Not available";
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    const millis = numeric > 10_000_000_000 ? numeric : numeric * 1000;
+    return new Date(millis).toLocaleString();
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
 function collectionMailtoHref(item: UnresolvedCollection) {
   if (!item.managerEmail) return null;
-  const subject = `Equipment collection needed: ${item.employeeName} - ${item.assetTag}`;
+  const subject = `Equipment collection needed: ${formatDisplayName(item.employeeName)} - ${item.assetTag}`;
   const body = [
-    `Hello ${item.managerName ?? "Manager"},`,
+    `Hello ${firstNameOnly(item.managerName)},`,
     "",
     "We are following up on an unresolved equipment return that appears to be under your management responsibility. Please coordinate collection of the equipment listed below and return it to the IT Department as soon as possible.",
     "",
     "Collection details:",
-    `Employee: ${item.employeeName}${item.employeeEmail ? ` <${item.employeeEmail}>` : ""}`,
+    `Employee: ${formatDisplayName(item.employeeName)}${item.employeeEmail ? ` <${item.employeeEmail}>` : ""}`,
     `Employee ID: ${item.employeeId}`,
     `Asset tag: ${item.assetTag}`,
     `Category: ${item.catName ?? "Not available"}`,
     `Serial: ${item.serial ?? "Not available"}`,
     `Model: ${item.model ?? "Not available"}`,
+    `NinjaOne evidence: ${ninjaOneSummary(item) || "No matching NinjaOne device found"}`,
     `Current investigation status: ${investigationStatusLabel(item.status)}`,
     `Detected: ${new Date(item.detectedAt).toLocaleString()}`,
     "",
@@ -125,8 +173,9 @@ function collectionMailtoHref(item: UnresolvedCollection) {
 }
 
 function unresolvedSortValue(item: UnresolvedCollection, key: UnresolvedSortKey) {
-  if (key === "employee") return `${item.employeeName} ${item.employeeEmail ?? item.employeeId}`;
-  if (key === "manager") return `${item.managerName ?? ""} ${item.managerEmail ?? item.managerEmployeeId ?? ""}`;
+  if (key === "employee") return `${formatDisplayName(item.employeeName)} ${item.employeeEmail ?? item.employeeId}`;
+  if (key === "manager") return `${formatDisplayName(item.managerName)} ${item.managerEmail ?? item.managerEmployeeId ?? ""}`;
+  if (key === "ninjaOne") return ninjaOneSummary(item);
   if (key === "detectedAt") return new Date(item.detectedAt).getTime();
   return item[key] ?? "";
 }
@@ -134,15 +183,26 @@ function unresolvedSortValue(item: UnresolvedCollection, key: UnresolvedSortKey)
 function unresolvedFilterText(item: UnresolvedCollection) {
   return [
     item.employeeName,
+    formatDisplayName(item.employeeName),
     item.employeeEmail,
     item.employeeId,
     item.managerName,
+    formatDisplayName(item.managerName),
     item.managerEmail,
     item.managerEmployeeId,
     item.assetTag,
     item.catName,
     item.serial,
     item.model,
+    ninjaOneSummary(item),
+    ...item.ninjaOneMatches.flatMap((match) => [
+      match.displayName,
+      match.systemName,
+      match.dnsName,
+      match.netbiosName,
+      match.likelyUser,
+      match.matchReason,
+    ]),
     item.source,
     item.investigationNotes,
     item.status,
@@ -216,16 +276,17 @@ function UnresolvedTable({
 
   function exportTable() {
     exportRowsToCsv(exportName, [
-      { header: "Employee", value: (item) => item.employeeName },
+      { header: "Employee", value: (item) => formatDisplayName(item.employeeName) },
       { header: "Employee Email", value: (item) => item.employeeEmail },
       { header: "Employee ID", value: (item) => item.employeeId },
-      { header: "Manager", value: (item) => item.managerName ?? "Unknown" },
+      { header: "Manager", value: (item) => formatDisplayName(item.managerName) || "Unknown" },
       { header: "Manager Email", value: (item) => item.managerEmail },
       { header: "Manager Employee ID", value: (item) => item.managerEmployeeId },
       { header: "Asset Tag", value: (item) => item.assetTag },
       { header: "Category", value: (item) => item.catName },
       { header: "Serial", value: (item) => item.serial },
       { header: "Model", value: (item) => item.model },
+      { header: "NinjaOne Device", value: (item) => ninjaOneSummary(item) },
       { header: "Detected", value: (item) => new Date(item.detectedAt).toLocaleString() },
       { header: "Status", value: (item) => investigationStatusLabel(item.status) },
       { header: "Investigation Notes", value: (item) => item.investigationNotes },
@@ -268,7 +329,7 @@ function UnresolvedTable({
         </button>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1180px]">
+        <table className="w-full min-w-[1380px]">
           <thead>
             <tr>
               {unresolvedColumns.map((column) => (
@@ -286,7 +347,7 @@ function UnresolvedTable({
             {filteredItems.map((item) => (
               <tr key={item.id} className="border-b border-[var(--border)] transition hover:bg-[var(--table-header-bg)]/50">
                 <td className="table-cell">
-                  <div className="font-medium text-[var(--text)]">{item.employeeName}</div>
+                  <div className="font-medium text-[var(--text)]">{formatDisplayName(item.employeeName)}</div>
                   <div className="text-xs text-[var(--muted)]">{item.employeeEmail ?? item.employeeId}</div>
                   {item.source === "reftab_unmatched_assignee" && (
                     <span className="mt-1 inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
@@ -295,7 +356,7 @@ function UnresolvedTable({
                   )}
                 </td>
                 <td className="table-cell">
-                  <div className="font-medium text-[var(--text)]">{item.managerName ?? "Unknown"}</div>
+                  <div className="font-medium text-[var(--text)]">{formatDisplayName(item.managerName) || "Unknown"}</div>
                   <div className="text-xs text-[var(--muted)]">
                     {item.managerEmail ? (
                       <a
@@ -314,6 +375,25 @@ function UnresolvedTable({
                 <td className="table-cell text-[var(--text-secondary)]">{item.catName ?? "-"}</td>
                 <td className="table-cell text-[var(--text-secondary)]">{item.serial ?? "-"}</td>
                 <td className="table-cell text-[var(--text-secondary)]">{item.model ?? "-"}</td>
+                <td className="table-cell text-[var(--text-secondary)]">
+                  {item.ninjaOneMatches.length > 0 ? (
+                    <div className="space-y-1">
+                      {item.ninjaOneMatches.map((match) => {
+                        const name = match.displayName ?? match.systemName ?? match.netbiosName ?? match.dnsName ?? match.id;
+                        return (
+                          <div key={match.id} className="rounded-md bg-blue-50 px-2 py-1 text-xs text-blue-900">
+                            <div className="font-medium">{name}</div>
+                            <div>{match.likelyUser ? `Likely user: ${match.likelyUser}` : "No user signal"}</div>
+                            <div>{match.offline ? "Offline" : "Online or unknown"} · matched by {match.matchReason}</div>
+                            {match.lastContact && <div>Last contact: {formatNinjaTimestamp(match.lastContact)}</div>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    "-"
+                  )}
+                </td>
                 <td className="table-cell text-[var(--text-secondary)]">{new Date(item.detectedAt).toLocaleString()}</td>
                 <td className="table-cell">
                   {isAdmin ? (

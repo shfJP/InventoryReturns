@@ -1,4 +1,5 @@
 import { syncEntraToDb } from "../src/lib/entra";
+import { syncNinjaOneToDb } from "../src/lib/ninjaone";
 import { syncReftabToDb } from "../src/lib/ref-tab";
 import { getSyncSettings } from "../src/lib/sync-settings";
 import { markSyncFailed, markSyncFinished, markSyncStarted } from "../src/lib/sync-status";
@@ -6,8 +7,10 @@ import { prisma } from "../src/lib/db";
 
 let entraRunning = false;
 let reftabRunning = false;
+let ninjaOneRunning = false;
 let lastEntraScheduledRunAt = 0;
 let lastReftabScheduledRunAt = 0;
+let lastNinjaOneScheduledRunAt = 0;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -57,6 +60,28 @@ async function runReftabSync(reason: string): Promise<void> {
   }
 }
 
+async function runNinjaOneSync(reason: string): Promise<void> {
+  if (ninjaOneRunning) {
+    console.info(`[sync] Skipping NinjaOne ${reason}: sync already running.`);
+    return;
+  }
+
+  ninjaOneRunning = true;
+  console.info(`[sync] Starting NinjaOne ${reason}.`);
+  try {
+    await markSyncStarted("ninjaone");
+    const result = await syncNinjaOneToDb();
+    await markSyncFinished("ninjaone", result);
+    console.info(`[sync] NinjaOne complete: ${JSON.stringify(result)}.`);
+  } catch (e) {
+    await markSyncFailed("ninjaone", e);
+    console.warn(`[sync] NinjaOne failed: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    ninjaOneRunning = false;
+    console.info(`[sync] Finished NinjaOne ${reason}.`);
+  }
+}
+
 async function main(): Promise<void> {
   console.info("[sync] Background sync worker started.");
 
@@ -64,8 +89,10 @@ async function main(): Promise<void> {
   if (initialSettings.autoSyncOnStartup) {
     if (initialSettings.syncEntra) await runEntraSync("startup sync");
     if (initialSettings.syncReftab) await runReftabSync("startup sync");
+    if (initialSettings.syncNinjaOne) await runNinjaOneSync("startup sync");
     lastEntraScheduledRunAt = Date.now();
     lastReftabScheduledRunAt = Date.now();
+    lastNinjaOneScheduledRunAt = Date.now();
   }
 
   while (true) {
@@ -76,6 +103,7 @@ async function main(): Promise<void> {
     const now = Date.now();
     const entraIntervalMs = Math.max(settings.entraIntervalMinutes, 5) * 60_000;
     const reftabIntervalMs = Math.max(settings.reftabIntervalMinutes, 5) * 60_000;
+    const ninjaOneIntervalMs = Math.max(settings.ninjaOneIntervalMinutes, 5) * 60_000;
 
     if (settings.syncEntra && now - lastEntraScheduledRunAt >= entraIntervalMs) {
       await runEntraSync(`scheduled sync every ${settings.entraIntervalMinutes} minute(s)`);
@@ -85,6 +113,11 @@ async function main(): Promise<void> {
     if (settings.syncReftab && now - lastReftabScheduledRunAt >= reftabIntervalMs) {
       await runReftabSync(`scheduled sync every ${settings.reftabIntervalMinutes} minute(s)`);
       lastReftabScheduledRunAt = Date.now();
+    }
+
+    if (settings.syncNinjaOne && now - lastNinjaOneScheduledRunAt >= ninjaOneIntervalMs) {
+      await runNinjaOneSync(`scheduled sync every ${settings.ninjaOneIntervalMinutes} minute(s)`);
+      lastNinjaOneScheduledRunAt = Date.now();
     }
   }
 }

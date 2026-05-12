@@ -25,6 +25,8 @@ export async function PUT(req: NextRequest) {
     entraIntervalMinutes: Number(body.entraIntervalMinutes),
     syncReftab: Boolean(body.syncReftab),
     reftabIntervalMinutes: Number(body.reftabIntervalMinutes),
+    syncNinjaOne: Boolean(body.syncNinjaOne),
+    ninjaOneIntervalMinutes: Number(body.ninjaOneIntervalMinutes),
   });
 
   return NextResponse.json(settings);

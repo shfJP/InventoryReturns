@@ -21,6 +21,89 @@ function statusLabel(status: string) {
     .join(" ");
 }
 
+type NinjaEvidence = {
+  id: string;
+  displayName: string | null;
+  systemName: string | null;
+  dnsName: string | null;
+  netbiosName: string | null;
+  likelyUser: string | null;
+  offline: boolean | null;
+  lastContact: string | null;
+  lastUpdate: string | null;
+  matchReason: string;
+};
+
+function normalizeMatchText(value: string | null | undefined): string {
+  return value?.toLowerCase().replace(/[^a-z0-9]+/g, "") ?? "";
+}
+
+function ninjaDeviceSearchText(device: {
+  displayName: string | null;
+  systemName: string | null;
+  dnsName: string | null;
+  netbiosName: string | null;
+  likelyUser: string | null;
+  detailsJson: string | null;
+}): string {
+  return [
+    device.displayName,
+    device.systemName,
+    device.dnsName,
+    device.netbiosName,
+    device.likelyUser,
+    device.detailsJson,
+  ].map(normalizeMatchText).join(" ");
+}
+
+function ninjaMatchesForItem(item: { assetTag: string; serial: string | null; model: string | null }, devices: Array<{
+  id: string;
+  displayName: string | null;
+  systemName: string | null;
+  dnsName: string | null;
+  netbiosName: string | null;
+  likelyUser: string | null;
+  offline: boolean | null;
+  lastContact: string | null;
+  lastUpdate: string | null;
+  detailsJson: string | null;
+}>): NinjaEvidence[] {
+  const candidates = [
+    { label: "asset tag", value: item.assetTag, score: 100 },
+    { label: "serial", value: item.serial, score: 90 },
+    { label: "model/title", value: item.model, score: 30 },
+  ]
+    .map((candidate) => ({ ...candidate, normalized: normalizeMatchText(candidate.value) }))
+    .filter((candidate) => candidate.normalized.length >= 3);
+
+  return devices
+    .map((device) => {
+      const haystack = ninjaDeviceSearchText(device);
+      const matches = candidates.filter((candidate) => haystack.includes(candidate.normalized));
+      if (matches.length === 0) return null;
+      return {
+        device,
+        score: matches.reduce((sum, match) => sum + match.score, 0),
+        matchReason: matches.map((match) => match.label).join(", "),
+      };
+    })
+    .filter((match): match is { device: typeof devices[number]; score: number; matchReason: string } => Boolean(match))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3)
+    .map(({ device, matchReason }) => ({
+      id: device.id,
+      displayName: device.displayName,
+      systemName: device.systemName,
+      dnsName: device.dnsName,
+      netbiosName: device.netbiosName,
+      likelyUser: device.likelyUser,
+      offline: device.offline,
+      lastContact: device.lastContact,
+      lastUpdate: device.lastUpdate,
+      matchReason,
+    }));
+}
+
 export async function GET(req: NextRequest) {
   const employeeId = await getCurrentEmployeeId();
   if (!employeeId) {
@@ -49,6 +132,8 @@ export async function GET(req: NextRequest) {
     },
   });
 
+  const ninjaDevices = await prisma.ninjaOneDevice.findMany();
+
   const items = unresolved.map((entry) => ({
       id: entry.id,
       employeeId: entry.employeeId,
@@ -74,6 +159,7 @@ export async function GET(req: NextRequest) {
         actorEmail: event.actorEmail,
         createdAt: event.createdAt.toISOString(),
       })),
+      ninjaOneMatches: ninjaMatchesForItem(entry, ninjaDevices),
       detectedAt: entry.detectedAt.toISOString(),
       status: entry.status,
     }));

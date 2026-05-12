@@ -49,6 +49,30 @@ model EquipmentAssignment {
   events CollectionEvent[]
 }
 
+model NinjaOneDevice {
+  id               String   @id
+  displayName      String?
+  systemName       String?
+  dnsName          String?
+  netbiosName      String?
+  organizationId   String?
+  locationId       String?
+  nodeClass        String?
+  approvalStatus   String?
+  offline          Boolean?
+  lastContact      String?
+  lastUpdate       String?
+  likelyUser       String?
+  detailsJson      String?
+  lastSyncedAt     DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([displayName])
+  @@index([systemName])
+  @@index([netbiosName])
+}
+
 model CollectionEvent {
   id                            String   @id @default(cuid())
   assetTag                      String

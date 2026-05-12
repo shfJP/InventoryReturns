@@ -7,6 +7,8 @@ export type SyncSettings = {
   entraIntervalMinutes: number;
   syncReftab: boolean;
   reftabIntervalMinutes: number;
+  syncNinjaOne: boolean;
+  ninjaOneIntervalMinutes: number;
 };
 
 const SYNC_SETTINGS_KEY = "syncSettings";
@@ -18,6 +20,8 @@ export const DEFAULT_SYNC_SETTINGS: SyncSettings = {
   entraIntervalMinutes: Math.max(Number(process.env.SYNC_CRON_ENTRA_INTERVAL_MINUTES) || 720, 5),
   syncReftab: process.env.SYNC_CRON_REFTAB !== "false",
   reftabIntervalMinutes: Math.max(Number(process.env.SYNC_CRON_REFTAB_INTERVAL_MINUTES) || 10, 5),
+  syncNinjaOne: process.env.SYNC_CRON_NINJAONE !== "false",
+  ninjaOneIntervalMinutes: Math.max(Number(process.env.SYNC_CRON_NINJAONE_INTERVAL_MINUTES) || 10, 5),
 };
 
 function normalizeSyncSettings(value: Partial<SyncSettings> | null | undefined): SyncSettings {
@@ -28,6 +32,9 @@ function normalizeSyncSettings(value: Partial<SyncSettings> | null | undefined):
   const reftabInterval = value?.reftabIntervalMinutes ?? (Number.isFinite(legacyInterval) && legacyInterval > 0
     ? legacyInterval
     : DEFAULT_SYNC_SETTINGS.reftabIntervalMinutes);
+  const ninjaOneInterval = value?.ninjaOneIntervalMinutes ?? (Number.isFinite(legacyInterval) && legacyInterval > 0
+    ? legacyInterval
+    : DEFAULT_SYNC_SETTINGS.ninjaOneIntervalMinutes);
   return {
     autoSyncOnStartup: Boolean(value?.autoSyncOnStartup ?? DEFAULT_SYNC_SETTINGS.autoSyncOnStartup),
     cronEnabled: Boolean(value?.cronEnabled ?? DEFAULT_SYNC_SETTINGS.cronEnabled),
@@ -35,6 +42,8 @@ function normalizeSyncSettings(value: Partial<SyncSettings> | null | undefined):
     entraIntervalMinutes: Math.max(Number(entraInterval) || 720, 5),
     syncReftab: Boolean(value?.syncReftab ?? DEFAULT_SYNC_SETTINGS.syncReftab),
     reftabIntervalMinutes: Math.max(Number(reftabInterval) || 10, 5),
+    syncNinjaOne: Boolean(value?.syncNinjaOne ?? DEFAULT_SYNC_SETTINGS.syncNinjaOne),
+    ninjaOneIntervalMinutes: Math.max(Number(ninjaOneInterval) || 10, 5),
   };
 }
 

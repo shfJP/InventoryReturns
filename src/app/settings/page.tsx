@@ -18,6 +18,8 @@ type SyncSettings = {
   entraIntervalMinutes: number;
   syncReftab: boolean;
   reftabIntervalMinutes: number;
+  syncNinjaOne: boolean;
+  ninjaOneIntervalMinutes: number;
 };
 
 type SyncRunStatus = {
@@ -31,6 +33,7 @@ type SyncRunStatus = {
 type SyncStatusResponse = {
   entra?: SyncRunStatus;
   reftab?: SyncRunStatus;
+  ninjaone?: SyncRunStatus;
 };
 
 export default function SettingsPage() {
@@ -161,6 +164,7 @@ export default function SettingsPage() {
             <div className="grid gap-4 sm:grid-cols-2">
               <SyncStatusCard label="Entra" status={syncStatus?.entra} />
               <SyncStatusCard label="Reftab" status={syncStatus?.reftab} />
+              <SyncStatusCard label="NinjaOne" status={syncStatus?.ninjaone} />
             </div>
 
             <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] px-3 py-2">
@@ -189,7 +193,7 @@ export default function SettingsPage() {
               />
             </label>
 
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-3">
               <div className="rounded-lg border border-[var(--border)] p-3">
                 <label className="flex items-center gap-2 text-sm font-medium text-[var(--text)]">
                   <input
@@ -229,6 +233,28 @@ export default function SettingsPage() {
                     step={5}
                     value={syncSettings.reftabIntervalMinutes}
                     onChange={(e) => setSyncSettings({ ...syncSettings, reftabIntervalMinutes: Number(e.target.value) })}
+                    className="mt-1 w-full rounded-lg border border-[var(--border)] px-3 py-2 text-sm"
+                  />
+                </label>
+              </div>
+
+              <div className="rounded-lg border border-[var(--border)] p-3">
+                <label className="flex items-center gap-2 text-sm font-medium text-[var(--text)]">
+                  <input
+                    type="checkbox"
+                    checked={syncSettings.syncNinjaOne}
+                    onChange={(e) => setSyncSettings({ ...syncSettings, syncNinjaOne: e.target.checked })}
+                  />
+                  Sync NinjaOne
+                </label>
+                <label className="mt-3 block">
+                  <span className="text-xs font-medium text-[var(--muted)]">NinjaOne interval minutes</span>
+                  <input
+                    type="number"
+                    min={5}
+                    step={5}
+                    value={syncSettings.ninjaOneIntervalMinutes}
+                    onChange={(e) => setSyncSettings({ ...syncSettings, ninjaOneIntervalMinutes: Number(e.target.value) })}
                     className="mt-1 w-full rounded-lg border border-[var(--border)] px-3 py-2 text-sm"
                   />
                 </label>

@@ -1,6 +1,6 @@
 import { prisma } from "./db";
 
-export type SyncSource = "entra" | "reftab";
+export type SyncSource = "entra" | "reftab" | "ninjaone";
 export type SyncRunState = "idle" | "running" | "success" | "error";
 
 export type SyncRunStatus = {
@@ -59,12 +59,13 @@ export async function getSyncRunStatus(source: SyncSource): Promise<SyncRunStatu
 
 export async function getAllSyncRunStatuses(): Promise<Record<SyncSource, SyncRunStatus>> {
   const rows = await prisma.appSetting.findMany({
-    where: { key: { in: [statusKey("entra"), statusKey("reftab")] } },
+    where: { key: { in: [statusKey("entra"), statusKey("reftab"), statusKey("ninjaone")] } },
   });
   const byKey = new Map(rows.map((row) => [row.key, row.value]));
   return {
     entra: parseStatus("entra", byKey.get(statusKey("entra"))),
     reftab: parseStatus("reftab", byKey.get(statusKey("reftab"))),
+    ninjaone: parseStatus("ninjaone", byKey.get(statusKey("ninjaone"))),
   };
 }
 

@@ -18,7 +18,7 @@ const reportNav = [
 ];
 
 type SyncState = "unknown" | "good" | "syncing" | "error";
-type SyncSource = "entra" | "reftab";
+type SyncSource = "entra" | "reftab" | "ninjaone";
 
 export default function Sidebar() {
   const pathname = usePathname();
@@ -28,6 +28,7 @@ export default function Sidebar() {
   const [syncStates, setSyncStates] = useState<Record<SyncSource, SyncState>>({
     entra: "unknown",
     reftab: "unknown",
+    ninjaone: "unknown",
   });
 
   useEffect(() => {
@@ -52,6 +53,7 @@ export default function Sidebar() {
         setSyncStates({
           entra: statusToSyncState(data.entra?.state, data.entraSyncedAt),
           reftab: statusToSyncState(data.reftab?.state, data.reftabSyncedAt),
+          ninjaone: statusToSyncState(data.ninjaone?.state, data.ninjaOneSyncedAt),
         });
       })
       .catch(() => {});
@@ -68,10 +70,12 @@ export default function Sidebar() {
           const nextStates = {
             entra: statusToSyncState(data.entra?.state, data.entraSyncedAt),
             reftab: statusToSyncState(data.reftab?.state, data.reftabSyncedAt),
+            ninjaone: statusToSyncState(data.ninjaone?.state, data.ninjaOneSyncedAt),
           };
           const finished =
             (syncStates.entra === "syncing" && nextStates.entra !== "syncing") ||
-            (syncStates.reftab === "syncing" && nextStates.reftab !== "syncing");
+            (syncStates.reftab === "syncing" && nextStates.reftab !== "syncing") ||
+            (syncStates.ninjaone === "syncing" && nextStates.ninjaone !== "syncing");
           setSyncStates(nextStates);
           if (finished) {
             router.refresh();
@@ -160,6 +164,16 @@ export default function Sidebar() {
                 endpoint="/api/admin/sync-reftab"
                 state={syncStates.reftab}
                 onStateChange={(state) => setSyncStates((prev) => ({ ...prev, reftab: state }))}
+                onComplete={() => {
+                  router.refresh();
+                  window.location.reload();
+                }}
+              />
+              <SyncButton
+                label="Sync NinjaOne"
+                endpoint="/api/admin/sync-ninjaone"
+                state={syncStates.ninjaone}
+                onStateChange={(state) => setSyncStates((prev) => ({ ...prev, ninjaone: state }))}
                 onComplete={() => {
                   router.refresh();
                   window.location.reload();
