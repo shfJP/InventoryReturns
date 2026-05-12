@@ -25,7 +25,7 @@ export default function ChooseViewPage() {
   return (
     <div className="mx-auto max-w-2xl space-y-8 py-8">
       <div className="text-center">
-        <h1 className="text-2xl font-bold text-[var(--text)]">Choose your dashboard</h1>
+        <h1 className="text-2xl font-bold text-[var(--text)]">Switch dashboard view</h1>
         <p className="mt-2 text-[var(--muted)]">Pick how you want to see your reports and their equipment.</p>
       </div>
       <div className="grid gap-4 sm:grid-cols-1">

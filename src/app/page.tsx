@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { isLoggedIn, getDashboardView, type DashboardView } from "@/lib/auth-session";
+import { isLoggedIn, getDashboardViewOrDefault, type DashboardView } from "@/lib/auth-session";
 import type { DashboardData, Equipment } from "@/types/dashboard";
 import DashboardTable from "@/components/DashboardTable";
 import DashboardCards from "@/components/DashboardCards";
@@ -28,12 +28,7 @@ function DashboardPageInner() {
       router.replace("/login");
       return;
     }
-    const v = getDashboardView();
-    if (!v) {
-      router.replace("/choose-view");
-      return;
-    }
-    setView(v);
+    setView(getDashboardViewOrDefault());
   }, [router]);
 
   useEffect(() => {

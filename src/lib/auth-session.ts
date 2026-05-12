@@ -4,6 +4,7 @@ const KEY_LOGGED_IN = "portal_logged_in";
 const KEY_VIEW = "portal_dashboard_view";
 
 export type DashboardView = "table" | "cards" | "assets";
+export const DEFAULT_DASHBOARD_VIEW: DashboardView = "table";
 
 export function isLoggedIn(): boolean {
   if (typeof window === "undefined") return false;
@@ -20,6 +21,10 @@ export function getDashboardView(): DashboardView | null {
   const v = sessionStorage.getItem(KEY_VIEW);
   if (v === "table" || v === "cards" || v === "assets") return v;
   return null;
+}
+
+export function getDashboardViewOrDefault(): DashboardView {
+  return getDashboardView() ?? DEFAULT_DASHBOARD_VIEW;
 }
 
 export function setDashboardView(view: DashboardView): void {

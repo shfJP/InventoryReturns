@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { signIn, useSession } from "next-auth/react";
-import { isLoggedIn, getDashboardView, setLoggedIn } from "@/lib/auth-session";
+import { isLoggedIn, setLoggedIn } from "@/lib/auth-session";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -21,19 +21,19 @@ export default function LoginPage() {
   useEffect(() => {
     if (ssoEnabled && status === "authenticated" && session) {
       setLoggedIn();
-      router.replace(getDashboardView() ? "/" : "/choose-view");
+      router.replace("/");
     }
   }, [ssoEnabled, status, session, router]);
 
   useEffect(() => {
     if (!ssoEnabled && isLoggedIn()) {
-      router.replace(getDashboardView() ? "/" : "/choose-view");
+      router.replace("/");
     }
   }, [ssoEnabled, router]);
 
   function handlePilotLogin() {
     setLoggedIn();
-    router.replace("/choose-view");
+    router.replace("/");
   }
 
   function handleSSOLogin() {

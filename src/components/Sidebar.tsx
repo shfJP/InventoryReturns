@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 
 const mainNav = [
   { href: "/", label: "Dashboard", icon: DashboardIcon },
+  { href: "/choose-view", label: "Switch view", icon: LayoutIcon },
   { href: "/collection", label: "Collection log", icon: CollectionIcon },
 ];
 
@@ -23,7 +24,7 @@ type SyncSource = "entra" | "reftab" | "ninjaone";
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const isPublic = pathname === "/login" || pathname === "/choose-view";
+  const isPublic = pathname === "/login";
   const [isAdmin, setIsAdmin] = useState(false);
   const [syncStates, setSyncStates] = useState<Record<SyncSource, SyncState>>({
     entra: "unknown",
@@ -182,14 +183,6 @@ export default function Sidebar() {
               <AdminLink href="/admin/asset-values" label="Asset Values" active={pathname === "/admin/asset-values"} />
             </>
           )}
-
-          <Link
-            href="/choose-view"
-            className="mt-2 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-[var(--text-secondary)] hover:bg-gray-200 hover:text-[var(--text)]"
-          >
-            <LayoutIcon className="h-5 w-5 shrink-0" />
-            <span>Switch view</span>
-          </Link>
         </nav>
       )}
     </aside>
