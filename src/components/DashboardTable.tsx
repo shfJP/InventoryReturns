@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
 import type { DashboardData } from "@/types/dashboard";
 import { exportRowsToCsv } from "@/lib/csv-export";
+import { formatPersonName } from "@/lib/display-name";
 import ContentHeader from "./ContentHeader";
 import Pagination from "./Pagination";
 
@@ -35,7 +36,7 @@ export default function DashboardTable({ data, initialSearchQuery = "" }: { data
     if (q) {
       list = list.filter(
         (s) =>
-          s.displayName.toLowerCase().includes(q) ||
+          formatPersonName(s.displayName).toLowerCase().includes(q) ||
           s.employeeId.toLowerCase().includes(q) ||
           s.email.toLowerCase().includes(q)
       );
@@ -74,7 +75,7 @@ export default function DashboardTable({ data, initialSearchQuery = "" }: { data
   };
   const exportStaff = () => {
     exportRowsToCsv("dashboard-reports.csv", [
-      { header: "Name", value: (s) => s.displayName },
+      { header: "Name", value: (s) => formatPersonName(s.displayName) },
       { header: "Employee ID", value: (s) => s.employeeId },
       { header: "Email", value: (s) => s.email },
       { header: "Active", value: (s) => s.isActive === false ? "No" : "Yes" },
@@ -105,7 +106,7 @@ export default function DashboardTable({ data, initialSearchQuery = "" }: { data
         </button>
       </div>
       <p className="text-sm text-[var(--muted)]">
-        Signed in as {me.displayName} ({me.employeeId}) · Showing {filteredStaff.length} of {staff.length}
+        Signed in as {formatPersonName(me.displayName)} ({me.employeeId}) · Showing {filteredStaff.length} of {staff.length}
       </p>
 
       <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm">
@@ -131,7 +132,7 @@ export default function DashboardTable({ data, initialSearchQuery = "" }: { data
                     className="border-b border-[var(--border)] transition hover:bg-[var(--table-header-bg)]/50"
                   >
                     <td className="table-cell font-medium text-[var(--text)]">
-                      {s.displayName}
+                      {formatPersonName(s.displayName)}
                       {s.isActive === false && (
                         <span className="ml-2 inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
                           Inactive

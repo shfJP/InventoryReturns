@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { isLoggedIn } from "@/lib/auth-session";
+import { formatPersonName } from "@/lib/display-name";
 
 type PeriodData = {
   total: number;
@@ -93,7 +94,7 @@ export default function CollectionByPeriodPage() {
       e.assetTag,
       e.serial ?? "",
       e.assignedToEmployeeId,
-      e.markedByManager,
+      formatPersonName(e.markedByManager),
       new Date(e.markedCollectedAt).toLocaleString(),
       e.status,
       e.collectedByRole,
@@ -233,7 +234,7 @@ export default function CollectionByPeriodPage() {
                     <tr key={e.id} className="border-b border-[var(--border)] hover:bg-[var(--table-header-bg)]/50">
                       <td className="table-cell font-medium text-[var(--text)]">{e.assetTag} {e.serial ? `(${e.serial})` : ""}</td>
                       <td className="table-cell text-[var(--text-secondary)]">{e.assignedToEmployeeId}</td>
-                      <td className="table-cell text-[var(--text)]">{e.markedByManager}</td>
+                      <td className="table-cell text-[var(--text)]">{formatPersonName(e.markedByManager)}</td>
                       <td className="table-cell text-[var(--muted)]">{new Date(e.markedCollectedAt).toLocaleString()}</td>
                       <td className="table-cell">
                         <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${e.collectedByRole === "it" ? "bg-blue-50 text-blue-700" : "bg-gray-100 text-gray-700"}`}>

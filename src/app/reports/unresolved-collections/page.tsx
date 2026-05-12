@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { isLoggedIn } from "@/lib/auth-session";
 import { exportRowsToCsv } from "@/lib/csv-export";
+import { firstNameOnly, formatPersonName } from "@/lib/display-name";
 
 type UnresolvedCollection = {
   id: string;
@@ -79,20 +80,6 @@ function hasKnownManager(item: UnresolvedCollection) {
   );
 }
 
-function formatDisplayName(name: string | null | undefined) {
-  const trimmed = name?.trim().replace(/\s+/g, " ");
-  if (!trimmed) return "";
-  const [last, ...rest] = trimmed.split(",");
-  if (rest.length === 0) return trimmed;
-  const first = rest.join(",").trim().replace(/\s+/g, " ");
-  return first ? `${first} ${last.trim()}` : trimmed;
-}
-
-function firstNameOnly(name: string | null | undefined) {
-  const displayName = formatDisplayName(name);
-  return displayName.split(/\s+/)[0] || "Manager";
-}
-
 type SortDirection = "asc" | "desc";
 type UnresolvedSortKey = "employee" | "manager" | "assetTag" | "catName" | "serial" | "model" | "ninjaOne" | "detectedAt" | "status" | "investigationNotes";
 
@@ -144,14 +131,14 @@ function formatNinjaTimestamp(value: string | null | undefined) {
 
 function collectionMailtoHref(item: UnresolvedCollection) {
   if (!item.managerEmail) return null;
-  const subject = `Equipment collection needed: ${formatDisplayName(item.employeeName)} - ${item.assetTag}`;
+  const subject = `Equipment collection needed: ${formatPersonName(item.employeeName)} - ${item.assetTag}`;
   const body = [
-    `Hello ${firstNameOnly(item.managerName)},`,
+    `Hello ${firstNameOnly(item.managerName, "Manager")},`,
     "",
     "We are following up on an unresolved equipment return that appears to be under your management responsibility. Please coordinate collection of the equipment listed below and return it to the IT Department as soon as possible.",
     "",
     "Collection details:",
-    `Employee: ${formatDisplayName(item.employeeName)}${item.employeeEmail ? ` <${item.employeeEmail}>` : ""}`,
+    `Employee: ${formatPersonName(item.employeeName)}${item.employeeEmail ? ` <${item.employeeEmail}>` : ""}`,
     `Employee ID: ${item.employeeId}`,
     `Asset tag: ${item.assetTag}`,
     `Category: ${item.catName ?? "Not available"}`,
@@ -173,8 +160,8 @@ function collectionMailtoHref(item: UnresolvedCollection) {
 }
 
 function unresolvedSortValue(item: UnresolvedCollection, key: UnresolvedSortKey) {
-  if (key === "employee") return `${formatDisplayName(item.employeeName)} ${item.employeeEmail ?? item.employeeId}`;
-  if (key === "manager") return `${formatDisplayName(item.managerName)} ${item.managerEmail ?? item.managerEmployeeId ?? ""}`;
+  if (key === "employee") return `${formatPersonName(item.employeeName)} ${item.employeeEmail ?? item.employeeId}`;
+  if (key === "manager") return `${formatPersonName(item.managerName)} ${item.managerEmail ?? item.managerEmployeeId ?? ""}`;
   if (key === "ninjaOne") return ninjaOneSummary(item);
   if (key === "detectedAt") return new Date(item.detectedAt).getTime();
   return item[key] ?? "";
@@ -183,11 +170,11 @@ function unresolvedSortValue(item: UnresolvedCollection, key: UnresolvedSortKey)
 function unresolvedFilterText(item: UnresolvedCollection) {
   return [
     item.employeeName,
-    formatDisplayName(item.employeeName),
+    formatPersonName(item.employeeName),
     item.employeeEmail,
     item.employeeId,
     item.managerName,
-    formatDisplayName(item.managerName),
+    formatPersonName(item.managerName),
     item.managerEmail,
     item.managerEmployeeId,
     item.assetTag,
@@ -276,10 +263,10 @@ function UnresolvedTable({
 
   function exportTable() {
     exportRowsToCsv(exportName, [
-      { header: "Employee", value: (item) => formatDisplayName(item.employeeName) },
+      { header: "Employee", value: (item) => formatPersonName(item.employeeName) },
       { header: "Employee Email", value: (item) => item.employeeEmail },
       { header: "Employee ID", value: (item) => item.employeeId },
-      { header: "Manager", value: (item) => formatDisplayName(item.managerName) || "Unknown" },
+      { header: "Manager", value: (item) => formatPersonName(item.managerName) || "Unknown" },
       { header: "Manager Email", value: (item) => item.managerEmail },
       { header: "Manager Employee ID", value: (item) => item.managerEmployeeId },
       { header: "Asset Tag", value: (item) => item.assetTag },
@@ -347,7 +334,7 @@ function UnresolvedTable({
             {filteredItems.map((item) => (
               <tr key={item.id} className="border-b border-[var(--border)] transition hover:bg-[var(--table-header-bg)]/50">
                 <td className="table-cell">
-                  <div className="font-medium text-[var(--text)]">{formatDisplayName(item.employeeName)}</div>
+                  <div className="font-medium text-[var(--text)]">{formatPersonName(item.employeeName)}</div>
                   <div className="text-xs text-[var(--muted)]">{item.employeeEmail ?? item.employeeId}</div>
                   {item.source === "reftab_unmatched_assignee" && (
                     <span className="mt-1 inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
@@ -356,7 +343,7 @@ function UnresolvedTable({
                   )}
                 </td>
                 <td className="table-cell">
-                  <div className="font-medium text-[var(--text)]">{formatDisplayName(item.managerName) || "Unknown"}</div>
+                  <div className="font-medium text-[var(--text)]">{formatPersonName(item.managerName) || "Unknown"}</div>
                   <div className="text-xs text-[var(--muted)]">
                     {item.managerEmail ? (
                       <a
@@ -445,7 +432,7 @@ function UnresolvedTable({
                           {item.auditEvents.map((event) => (
                             <div key={event.id} className="border-t border-[var(--border)] py-1 text-xs text-[var(--text-secondary)] first:border-t-0">
                               <div className="font-medium text-[var(--text)]">{event.action.replace(/_/g, " ")}</div>
-                              <div>{new Date(event.createdAt).toLocaleString()} · {event.actorName ?? event.actorEmail ?? "Unknown user"}</div>
+                              <div>{new Date(event.createdAt).toLocaleString()} · {formatPersonName(event.actorName) || event.actorEmail || "Unknown user"}</div>
                               {event.note && <div className="mt-0.5">{event.note}</div>}
                             </div>
                           ))}

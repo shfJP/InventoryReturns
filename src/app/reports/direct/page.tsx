@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { isLoggedIn } from "@/lib/auth-session";
 import { exportRowsToCsv } from "@/lib/csv-export";
+import { formatPersonName } from "@/lib/display-name";
 
 type DirectReport = {
   employeeId: string;
@@ -46,7 +47,7 @@ export default function DirectReportsPage() {
 
   function exportReports() {
     exportRowsToCsv("direct-reports.csv", [
-      { header: "Name", value: (row) => row.displayName },
+      { header: "Name", value: (row) => formatPersonName(row.displayName) },
       { header: "Employee ID", value: (row) => row.employeeId },
       { header: "Email", value: (row) => row.email },
       { header: "Active", value: (row) => row.isActive ? "Yes" : "No" },
@@ -105,7 +106,7 @@ export default function DirectReportsPage() {
               {reports.map((r) => (
                 <tr key={r.employeeId} className="border-b border-[var(--border)] transition hover:bg-[var(--table-header-bg)]/50">
                   <td className="table-cell font-medium text-[var(--text)]">
-                    {r.displayName}
+                    {formatPersonName(r.displayName)}
                     {!r.isActive && (
                       <span className="ml-2 inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
                         Inactive

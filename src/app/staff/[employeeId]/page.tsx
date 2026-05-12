@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { isLoggedIn } from "@/lib/auth-session";
 import { exportRowsToCsv } from "@/lib/csv-export";
+import { formatPersonName } from "@/lib/display-name";
 
 type Equipment = {
   id: string | null;
@@ -213,7 +214,7 @@ export default function StaffDetailPage() {
         <Link href="/" className="text-sm text-[var(--muted)] hover:text-[var(--accent)]">← Dashboard</Link>
       </div>
       <div className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm">
-        <h1 className="text-2xl font-bold text-[var(--text)]">{staff.displayName}</h1>
+        <h1 className="text-2xl font-bold text-[var(--text)]">{formatPersonName(staff.displayName)}</h1>
         <p className="text-[var(--muted)]">{staff.employeeId} · {staff.email}</p>
       </div>
 

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signOut as nextAuthSignOut, useSession } from "next-auth/react";
 import { logout } from "@/lib/auth-session";
+import { formatPersonName } from "@/lib/display-name";
 
 export default function TopBar() {
   const router = useRouter();
@@ -18,7 +19,7 @@ export default function TopBar() {
   const helpRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
 
-  const userName = session?.user?.name ?? session?.user?.email ?? "User";
+  const userName = formatPersonName(session?.user?.name) || session?.user?.email || "User";
   const userInitial = userName.trim().charAt(0).toUpperCase() || "U";
   const avatarSrc = ssoEnabled ? "/api/me/avatar" : session?.user?.image ?? null;
 

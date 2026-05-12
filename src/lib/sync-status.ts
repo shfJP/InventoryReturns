@@ -1,4 +1,5 @@
 import { prisma } from "./db";
+import { invalidateUnresolvedCollectionsCache } from "./unresolved-cache";
 
 export type SyncSource = "entra" | "reftab" | "ninjaone";
 export type SyncRunState = "idle" | "running" | "success" | "error";
@@ -87,6 +88,9 @@ export async function markSyncStarted(source: SyncSource): Promise<SyncRunStatus
 }
 
 export async function markSyncFinished(source: SyncSource, result: unknown): Promise<SyncRunStatus> {
+  if (source === "entra" || source === "reftab" || source === "ninjaone") {
+    await invalidateUnresolvedCollectionsCache();
+  }
   const current = await getSyncRunStatus(source);
   return saveStatus(source, {
     ...current,

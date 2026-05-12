@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { isLoggedIn } from "@/lib/auth-session";
 import { exportRowsToCsv } from "@/lib/csv-export";
+import { formatPersonName } from "@/lib/display-name";
 
 type Event = {
   id: string;
@@ -77,11 +78,11 @@ export default function CollectionPage() {
     { header: "Asset Tag", value: (e: Event) => e.assetTag },
     { header: "Serial", value: (e: Event) => e.serial },
     { header: "Assigned To", value: (e: Event) => e.assignedToEmployeeId },
-    { header: "Marked By", value: (e: Event) => e.markedByManager },
+    { header: "Marked By", value: (e: Event) => formatPersonName(e.markedByManager) },
     { header: "Marked At", value: (e: Event) => new Date(e.markedCollectedAt).toLocaleString() },
     { header: "Notes", value: (e: Event) => e.notes },
     { header: "Status", value: (e: Event) => e.status },
-    { header: "Closed By", value: (e: Event) => e.closedOutBy },
+    { header: "Closed By", value: (e: Event) => formatPersonName(e.closedOutBy) },
     { header: "Closed At", value: (e: Event) => e.closedOutAt ? new Date(e.closedOutAt).toLocaleString() : "" },
   ];
 
@@ -115,7 +116,7 @@ export default function CollectionPage() {
                   <tr key={e.id} className="border-b border-[var(--border)] hover:bg-[var(--table-header-bg)]/50">
                     <td className="table-cell font-medium">{e.assetTag} {e.serial ? `(${e.serial})` : ""}</td>
                     <td className="table-cell text-[var(--text-secondary)]">{e.assignedToEmployeeId}</td>
-                    <td className="table-cell text-[var(--text)]">{e.markedByManager}</td>
+                    <td className="table-cell text-[var(--text)]">{formatPersonName(e.markedByManager)}</td>
                     <td className="table-cell text-[var(--muted)]">{new Date(e.markedCollectedAt).toLocaleString()}</td>
                     <td className="table-cell text-[var(--muted)]">{e.notes ?? "—"}</td>
                     <td className="table-cell">
@@ -162,8 +163,8 @@ export default function CollectionPage() {
                   <tr key={e.id} className="border-b border-[var(--border)] hover:bg-[var(--table-header-bg)]/50">
                     <td className="table-cell font-medium text-[var(--text)]">{e.assetTag}</td>
                     <td className="table-cell text-[var(--text-secondary)]">{e.assignedToEmployeeId}</td>
-                    <td className="table-cell text-[var(--text)]">{e.markedByManager}</td>
-                    <td className="table-cell text-[var(--muted)]">{e.closedOutBy ?? "—"}</td>
+                    <td className="table-cell text-[var(--text)]">{formatPersonName(e.markedByManager)}</td>
+                    <td className="table-cell text-[var(--muted)]">{formatPersonName(e.closedOutBy) || "—"}</td>
                     <td className="table-cell text-[var(--muted)]">
                       {e.closedOutAt ? new Date(e.closedOutAt).toLocaleString() : "—"}
                     </td>

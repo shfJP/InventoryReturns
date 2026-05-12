@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
 import type { DashboardData } from "@/types/dashboard";
 import { exportRowsToCsv } from "@/lib/csv-export";
+import { formatPersonName } from "@/lib/display-name";
 import ContentHeader from "./ContentHeader";
 import Pagination from "./Pagination";
 
@@ -41,7 +42,7 @@ export default function DashboardAssets({ data, initialSearchQuery = "" }: { dat
           (e.serial?.toLowerCase().includes(q)) ||
           (e.model?.toLowerCase().includes(q)) ||
           e.assignedToEmployeeId.toLowerCase().includes(q) ||
-          (assignee?.displayName.toLowerCase().includes(q))
+          (assignee && formatPersonName(assignee.displayName).toLowerCase().includes(q))
         );
       });
     }
@@ -76,7 +77,7 @@ export default function DashboardAssets({ data, initialSearchQuery = "" }: { dat
       { header: "Asset Tag", value: (e) => e.assetTag },
       { header: "Serial", value: (e) => e.serial },
       { header: "Model", value: (e) => e.model },
-      { header: "Assigned To", value: (e) => staffById[e.assignedToEmployeeId]?.displayName ?? e.assignedToEmployeeId },
+      { header: "Assigned To", value: (e) => formatPersonName(staffById[e.assignedToEmployeeId]?.displayName) || e.assignedToEmployeeId },
       { header: "Assigned To Employee ID", value: (e) => e.assignedToEmployeeId },
       { header: "Status", value: (e) => e.collectionStatus },
     ], filteredEquipment);
@@ -104,7 +105,7 @@ export default function DashboardAssets({ data, initialSearchQuery = "" }: { dat
         </button>
       </div>
       <p className="text-sm text-[var(--muted)]">
-        Signed in as {me.displayName} ({me.employeeId}). Return logistics view. · Showing {filteredEquipment.length} of {equipment.length}
+        Signed in as {formatPersonName(me.displayName)} ({me.employeeId}). Return logistics view. · Showing {filteredEquipment.length} of {equipment.length}
       </p>
 
       <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm">
@@ -138,7 +139,7 @@ export default function DashboardAssets({ data, initialSearchQuery = "" }: { dat
                           href={`/staff/${encodeURIComponent(e.assignedToEmployeeId)}`}
                           className="text-[var(--accent)] hover:underline"
                         >
-                          {assignee.displayName}
+                          {formatPersonName(assignee.displayName)}
                         </Link>
                       ) : (
                         <span className="text-[var(--muted)]">{e.assignedToEmployeeId}</span>

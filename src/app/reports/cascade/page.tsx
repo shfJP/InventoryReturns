@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { isLoggedIn } from "@/lib/auth-session";
 import { exportRowsToCsv } from "@/lib/csv-export";
+import { formatPersonName } from "@/lib/display-name";
 
 type TreeNode = {
   employeeId: string;
@@ -46,7 +47,7 @@ function TreeRow({ node, expanded, toggle }: { node: TreeNode; expanded: Set<str
               </button>
             )}
             {!hasChildren && <span className="w-5" />}
-            <span className="font-medium text-[var(--text)]">{node.displayName}</span>
+            <span className="font-medium text-[var(--text)]">{formatPersonName(node.displayName)}</span>
             {!node.isActive && (
               <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
                 Inactive
@@ -149,7 +150,7 @@ export default function CascadeReportsPage() {
   const flattenedTree = flattenTree(tree);
   function exportHierarchy() {
     exportRowsToCsv("cascade-reports.csv", [
-      { header: "Name", value: (row) => row.displayName },
+      { header: "Name", value: (row) => formatPersonName(row.displayName) },
       { header: "Employee ID", value: (row) => row.employeeId },
       { header: "Email", value: (row) => row.email },
       { header: "Depth", value: (row) => row.depth },

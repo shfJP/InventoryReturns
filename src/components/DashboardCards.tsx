@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
 import type { DashboardData } from "@/types/dashboard";
+import { formatPersonName } from "@/lib/display-name";
 import ContentHeader from "./ContentHeader";
 
 const CARD_FILTER_OPTIONS = [
@@ -27,7 +28,7 @@ export default function DashboardCards({ data, initialSearchQuery = "" }: { data
     if (q) {
       list = list.filter(
         (s) =>
-          s.displayName.toLowerCase().includes(q) ||
+          formatPersonName(s.displayName).toLowerCase().includes(q) ||
           s.employeeId.toLowerCase().includes(q) ||
           s.email.toLowerCase().includes(q)
       );
@@ -59,7 +60,7 @@ export default function DashboardCards({ data, initialSearchQuery = "" }: { data
         showSettingsLink={true}
       />
       <p className="text-sm text-[var(--muted)]">
-        Signed in as {me.displayName} ({me.employeeId}) · Showing {filteredStaff.length} of {staff.length}
+        Signed in as {formatPersonName(me.displayName)} ({me.employeeId}) · Showing {filteredStaff.length} of {staff.length}
       </p>
 
       <section>
@@ -77,10 +78,10 @@ export default function DashboardCards({ data, initialSearchQuery = "" }: { data
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--accent)]/20 text-[var(--accent)]">
-                        {s.displayName.charAt(0)}
+                        {formatPersonName(s.displayName).charAt(0)}
                       </div>
                       <h3 className="mt-2 font-semibold text-[var(--text)]">
-                        {s.displayName}
+                        {formatPersonName(s.displayName)}
                         {s.isActive === false && (
                           <span className="ml-2 inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
                             Inactive

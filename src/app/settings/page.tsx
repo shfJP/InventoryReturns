@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
+import { formatPersonName } from "@/lib/display-name";
 
 type ApiUser = {
   employeeId: string;
@@ -74,7 +75,7 @@ export default function SettingsPage() {
       .catch(() => setUser(null));
   }, []);
 
-  const name = user?.displayName ?? session?.user?.name ?? "User";
+  const name = formatPersonName(user?.displayName ?? session?.user?.name) || "User";
   const email = user?.email ?? session?.user?.email ?? "";
   const employeeId = user?.employeeId ?? "";
 

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { isLoggedIn } from "@/lib/auth-session";
 import { exportRowsToCsv } from "@/lib/csv-export";
+import { formatPersonName } from "@/lib/display-name";
 
 type ManagerRank = {
   managerName: string;
@@ -57,7 +58,7 @@ export default function ITCollectionsPage() {
   function exportManagers() {
     if (!data) return;
     exportRowsToCsv("it-collections-manager-ranking.csv", [
-      { header: "Manager", value: (row) => row.managerName },
+      { header: "Manager", value: (row) => formatPersonName(row.managerName) },
       { header: "Manager ID", value: (row) => row.managerId },
       { header: "Total Items", value: (row) => row.totalUnderReports },
       { header: "Collected by Manager", value: (row) => row.collectedByManager },
@@ -184,7 +185,7 @@ export default function ITCollectionsPage() {
                     return (
                       <tr key={m.managerId} className={`border-b border-[var(--border)] transition hover:bg-[var(--table-header-bg)]/50 ${isRepeatOffender ? "bg-red-50/50" : ""}`}>
                         <td className="table-cell font-medium text-[var(--text)]">
-                          {m.managerName}
+                          {formatPersonName(m.managerName)}
                           {isRepeatOffender && (
                             <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
                               <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getCurrentEmployeeId, getReportEmployeeIds } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { notifyItCollected } from "@/lib/notify";
+import { invalidateUnresolvedCollectionsCache } from "@/lib/unresolved-cache";
 
 const bodySchema = z.object({
   assetTag: z.string().min(1),
@@ -74,7 +75,7 @@ export async function POST(req: NextRequest) {
     await prisma.equipmentAssignment.delete({ where: { id: equipment.id } });
   }
 
-  await prisma.unresolvedCollection.updateMany({
+  const resolvedUnresolved = await prisma.unresolvedCollection.updateMany({
     where: {
       status: "UNRESOLVED",
       assetTag,
@@ -84,6 +85,9 @@ export async function POST(req: NextRequest) {
       resolvedAt: event.markedCollectedAt,
     },
   });
+  if (resolvedUnresolved.count > 0) {
+    await invalidateUnresolvedCollectionsCache();
+  }
 
   const notifyResult = await notifyItCollected({
     assetTag,

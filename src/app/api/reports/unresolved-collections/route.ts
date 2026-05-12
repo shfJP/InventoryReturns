@@ -4,6 +4,7 @@ import { getCurrentEmployeeId, getCurrentUser, getReportEmployeeIds } from "@/li
 import { isCurrentUserAdmin } from "@/lib/admin-auth";
 import { prisma } from "@/lib/db";
 import { calculateUnresolvedLossSummary } from "@/lib/loss-summary";
+import { getCachedUnresolvedCollections, invalidateUnresolvedCollectionsCache } from "@/lib/unresolved-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -21,89 +22,6 @@ function statusLabel(status: string) {
     .join(" ");
 }
 
-type NinjaEvidence = {
-  id: string;
-  displayName: string | null;
-  systemName: string | null;
-  dnsName: string | null;
-  netbiosName: string | null;
-  likelyUser: string | null;
-  offline: boolean | null;
-  lastContact: string | null;
-  lastUpdate: string | null;
-  matchReason: string;
-};
-
-function normalizeMatchText(value: string | null | undefined): string {
-  return value?.toLowerCase().replace(/[^a-z0-9]+/g, "") ?? "";
-}
-
-function ninjaDeviceSearchText(device: {
-  displayName: string | null;
-  systemName: string | null;
-  dnsName: string | null;
-  netbiosName: string | null;
-  likelyUser: string | null;
-  detailsJson: string | null;
-}): string {
-  return [
-    device.displayName,
-    device.systemName,
-    device.dnsName,
-    device.netbiosName,
-    device.likelyUser,
-    device.detailsJson,
-  ].map(normalizeMatchText).join(" ");
-}
-
-function ninjaMatchesForItem(item: { assetTag: string; serial: string | null; model: string | null }, devices: Array<{
-  id: string;
-  displayName: string | null;
-  systemName: string | null;
-  dnsName: string | null;
-  netbiosName: string | null;
-  likelyUser: string | null;
-  offline: boolean | null;
-  lastContact: string | null;
-  lastUpdate: string | null;
-  detailsJson: string | null;
-}>): NinjaEvidence[] {
-  const candidates = [
-    { label: "asset tag", value: item.assetTag, score: 100 },
-    { label: "serial", value: item.serial, score: 90 },
-    { label: "model/title", value: item.model, score: 30 },
-  ]
-    .map((candidate) => ({ ...candidate, normalized: normalizeMatchText(candidate.value) }))
-    .filter((candidate) => candidate.normalized.length >= 3);
-
-  return devices
-    .map((device) => {
-      const haystack = ninjaDeviceSearchText(device);
-      const matches = candidates.filter((candidate) => haystack.includes(candidate.normalized));
-      if (matches.length === 0) return null;
-      return {
-        device,
-        score: matches.reduce((sum, match) => sum + match.score, 0),
-        matchReason: matches.map((match) => match.label).join(", "),
-      };
-    })
-    .filter((match): match is { device: typeof devices[number]; score: number; matchReason: string } => Boolean(match))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 3)
-    .map(({ device, matchReason }) => ({
-      id: device.id,
-      displayName: device.displayName,
-      systemName: device.systemName,
-      dnsName: device.dnsName,
-      netbiosName: device.netbiosName,
-      likelyUser: device.likelyUser,
-      offline: device.offline,
-      lastContact: device.lastContact,
-      lastUpdate: device.lastUpdate,
-      matchReason,
-    }));
-}
-
 export async function GET(req: NextRequest) {
   const employeeId = await getCurrentEmployeeId();
   if (!employeeId) {
@@ -112,60 +30,14 @@ export async function GET(req: NextRequest) {
 
   const admin = await isCurrentUserAdmin(req);
   const reportIds = admin ? [] : await getReportEmployeeIds(employeeId);
+  const cache = await getCachedUnresolvedCollections();
 
-  const unresolved = await prisma.unresolvedCollection.findMany({
-    where: admin
-      ? { status: { not: "RESOLVED" } }
-      : {
-          status: { not: "RESOLVED" },
-          OR: [
-            { managerEmployeeId: employeeId },
-            { employeeId: { in: reportIds } },
-          ],
-        },
-    orderBy: [{ detectedAt: "desc" }, { employeeName: "asc" }, { assetTag: "asc" }],
-    include: {
-      auditEvents: {
-        orderBy: { createdAt: "desc" },
-        take: 20,
-      },
-    },
-  });
+  const items = admin
+    ? cache.items
+    : cache.items.filter((item) => item.managerEmployeeId === employeeId || reportIds.includes(item.employeeId));
+  const summary = await calculateUnresolvedLossSummary(items);
 
-  const ninjaDevices = await prisma.ninjaOneDevice.findMany();
-
-  const items = unresolved.map((entry) => ({
-      id: entry.id,
-      employeeId: entry.employeeId,
-      employeeName: entry.employeeName,
-      employeeEmail: entry.employeeEmail,
-      managerEmployeeId: entry.managerEmployeeId,
-      managerName: entry.managerName,
-      managerEmail: entry.managerEmail,
-      assetTag: entry.assetTag,
-      catName: entry.catName,
-      serial: entry.serial,
-      model: entry.model,
-      source: entry.source,
-      investigationNotes: entry.investigationNotes,
-      auditEvents: entry.auditEvents.map((event) => ({
-        id: event.id,
-        action: event.action,
-        oldStatus: event.oldStatus,
-        newStatus: event.newStatus,
-        note: event.note,
-        actorEmployeeId: event.actorEmployeeId,
-        actorName: event.actorName,
-        actorEmail: event.actorEmail,
-        createdAt: event.createdAt.toISOString(),
-      })),
-      ninjaOneMatches: ninjaMatchesForItem(entry, ninjaDevices),
-      detectedAt: entry.detectedAt.toISOString(),
-      status: entry.status,
-    }));
-  const summary = await calculateUnresolvedLossSummary(unresolved.filter((entry) => entry.status !== "RESOLVED"));
-
-  return NextResponse.json({ items, summary });
+  return NextResponse.json({ items, summary, cache: { createdAt: cache.createdAt } });
 }
 
 export async function PATCH(req: NextRequest) {
@@ -243,6 +115,7 @@ export async function PATCH(req: NextRequest) {
     orderBy: { createdAt: "desc" },
     take: 20,
   });
+  await invalidateUnresolvedCollectionsCache();
 
   return NextResponse.json({
     id: updated.id,
