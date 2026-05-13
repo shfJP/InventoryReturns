@@ -18,7 +18,7 @@ export type Equipment = {
   details?: Record<string, string>;
   assignedToEmployeeId: string;
   source: string;
-  collectionStatus?: "collected" | "outstanding";
+  collectionStatus?: "assigned" | "collected" | "outstanding";
 };
 
 export type Me = { employeeId: string; displayName: string; email: string; isManager: boolean };

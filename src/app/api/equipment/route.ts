@@ -39,25 +39,14 @@ export async function GET(req: NextRequest) {
       assignedToEmployeeId: true,
       source: true,
       lastSyncedAt: true,
+      user: {
+        select: {
+          isActive: true,
+        },
+      },
     },
     orderBy: { assetTag: "asc" },
   });
-
-  const items = fromDb.map((e) => ({
-    id: e.id,
-    assetTag: e.assetTag,
-    aid: e.aid ?? undefined,
-    serial: e.serial ?? undefined,
-    model: e.model ?? undefined,
-    title: e.title ?? undefined,
-    catName: e.catName ?? undefined,
-    locationName: e.locationName ?? undefined,
-    statusName: e.statusName ?? undefined,
-    details: e.detailsJson ? JSON.parse(e.detailsJson) : undefined,
-    assignedToEmployeeId: e.assignedToEmployeeId,
-    source: e.source,
-    lastSyncedAt: e.lastSyncedAt?.toISOString() ?? null,
-  }));
 
   const collectionEvents = await prisma.collectionEvent.findMany({
     where: {
@@ -70,12 +59,30 @@ export async function GET(req: NextRequest) {
     collectionEvents.map((ce) => `${ce.assetTag}-${ce.assignedToEmployeeId}`)
   );
 
-  const annotated = items.map((e) => ({
-    ...e,
-    collectionStatus: collectedSet.has(`${e.assetTag}-${e.assignedToEmployeeId}`)
-      ? ("collected" as const)
-      : ("outstanding" as const),
-  }));
+  const annotated = fromDb.map((e) => {
+    const isCollected = collectedSet.has(`${e.assetTag}-${e.assignedToEmployeeId}`);
+    const assigneeIsMissingOrDisabled = e.user?.isActive !== true;
+    return {
+      id: e.id,
+      assetTag: e.assetTag,
+      aid: e.aid ?? undefined,
+      serial: e.serial ?? undefined,
+      model: e.model ?? undefined,
+      title: e.title ?? undefined,
+      catName: e.catName ?? undefined,
+      locationName: e.locationName ?? undefined,
+      statusName: e.statusName ?? undefined,
+      details: e.detailsJson ? JSON.parse(e.detailsJson) : undefined,
+      assignedToEmployeeId: e.assignedToEmployeeId,
+      source: e.source,
+      lastSyncedAt: e.lastSyncedAt?.toISOString() ?? null,
+      collectionStatus: isCollected
+        ? ("collected" as const)
+        : assigneeIsMissingOrDisabled
+          ? ("outstanding" as const)
+          : ("assigned" as const),
+    };
+  });
 
   const result = includeCollected
     ? annotated

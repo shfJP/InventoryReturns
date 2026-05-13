@@ -52,7 +52,7 @@ async function buildTree(parentId: string, depth: number, maxDepth: number): Pro
       depth,
       assigned,
       collected,
-      outstanding: assigned,
+      outstanding: report.isActive ? 0 : assigned,
       children,
     });
   }

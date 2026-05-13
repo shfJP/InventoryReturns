@@ -44,9 +44,8 @@ export async function GET() {
         ...report,
         assigned,
         collected,
-        outstanding: assigned,
-        // "assigned" from DB = current items still assigned. "collected" = items that have been collected.
-        // Total ever assigned = assigned + collected. Outstanding = assigned (what's left).
+        outstanding: report.isActive ? 0 : assigned,
+        // Outstanding means current equipment assigned to a disabled or missing Entra user.
         totalEverAssigned: assigned + collected,
       };
     })

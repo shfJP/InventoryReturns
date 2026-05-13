@@ -47,7 +47,7 @@ export default function DashboardAssets({ data, initialSearchQuery = "" }: { dat
       });
     }
     if (filterBy === "outstanding") {
-      list = list.filter((e) => e.collectionStatus !== "collected");
+      list = list.filter((e) => e.collectionStatus === "outstanding");
     } else if (filterBy === "collected") {
       list = list.filter((e) => e.collectionStatus === "collected");
     } else if (filterBy === "laptop") {
@@ -125,6 +125,7 @@ export default function DashboardAssets({ data, initialSearchQuery = "" }: { dat
               {paginatedEquipment.map((e) => {
                 const assignee = staffById[e.assignedToEmployeeId];
                 const isCollected = e.collectionStatus === "collected";
+                const isOutstanding = e.collectionStatus === "outstanding";
                 return (
                   <tr
                     key={`${e.assetTag}-${e.assignedToEmployeeId}`}
@@ -150,14 +151,18 @@ export default function DashboardAssets({ data, initialSearchQuery = "" }: { dat
                         <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700">
                           ✓ Collected
                         </span>
-                      ) : (
+                      ) : isOutstanding ? (
                         <span className="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700">
                           Outstanding
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center rounded-full bg-slate-50 px-2.5 py-0.5 text-xs font-medium text-slate-700">
+                          Assigned
                         </span>
                       )}
                     </td>
                     <td className="table-cell">
-                      {isCollected ? (
+                      {isCollected || !isOutstanding ? (
                         <span className="text-sm text-[var(--muted)]">—</span>
                       ) : (
                         <Link

@@ -48,7 +48,7 @@ export default function DashboardTable({ data, initialSearchQuery = "" }: { data
     } else if (filterBy === "outstanding_only") {
       list = list.filter((s) => {
         const items = equipmentByEmployee[s.employeeId] ?? [];
-        return items.some((e) => e.collectionStatus !== "collected");
+        return items.some((e) => e.collectionStatus === "outstanding");
       });
     } else if (filterBy === "collected_only") {
       list = list.filter((s) => {
@@ -79,7 +79,7 @@ export default function DashboardTable({ data, initialSearchQuery = "" }: { data
       { header: "Employee ID", value: (s) => s.employeeId },
       { header: "Email", value: (s) => s.email },
       { header: "Active", value: (s) => s.isActive === false ? "No" : "Yes" },
-      { header: "Outstanding", value: (s) => (equipmentByEmployee[s.employeeId] ?? []).filter((e) => e.collectionStatus !== "collected").length },
+      { header: "Outstanding", value: (s) => (equipmentByEmployee[s.employeeId] ?? []).filter((e) => e.collectionStatus === "outstanding").length },
       { header: "Collected", value: (s) => (equipmentByEmployee[s.employeeId] ?? []).filter((e) => e.collectionStatus === "collected").length },
     ], filteredStaff);
   };
@@ -124,7 +124,7 @@ export default function DashboardTable({ data, initialSearchQuery = "" }: { data
             <tbody>
               {paginatedStaff.map((s) => {
                 const items = equipmentByEmployee[s.employeeId] ?? [];
-                const outstanding = items.filter((e) => e.collectionStatus !== "collected").length;
+                const outstanding = items.filter((e) => e.collectionStatus === "outstanding").length;
                 const collected = items.filter((e) => e.collectionStatus === "collected").length;
                 return (
                   <tr
@@ -189,7 +189,7 @@ export default function DashboardTable({ data, initialSearchQuery = "" }: { data
             Total: <strong className="text-[var(--text)]">{data.equipment.length}</strong>
           </p>
           <p className="text-[var(--muted)]">
-            Outstanding: <strong className="text-amber-600">{data.equipment.filter((e) => e.collectionStatus !== "collected").length}</strong>
+            Outstanding: <strong className="text-amber-600">{data.equipment.filter((e) => e.collectionStatus === "outstanding").length}</strong>
           </p>
           <p className="text-[var(--muted)]">
             Collected: <strong className="text-emerald-600">{data.equipment.filter((e) => e.collectionStatus === "collected").length}</strong>

@@ -40,7 +40,7 @@ export default function DashboardCards({ data, initialSearchQuery = "" }: { data
     } else if (filterBy === "outstanding_only") {
       list = list.filter((s) => {
         const items = equipmentByEmployee[s.employeeId] ?? [];
-        return items.some((e) => e.collectionStatus !== "collected");
+        return items.some((e) => e.collectionStatus === "outstanding");
       });
     }
     return list;
@@ -67,7 +67,7 @@ export default function DashboardCards({ data, initialSearchQuery = "" }: { data
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {filteredStaff.map((s) => {
             const items = equipmentByEmployee[s.employeeId] ?? [];
-            const outstanding = items.filter((e) => e.collectionStatus !== "collected").length;
+            const outstanding = items.filter((e) => e.collectionStatus === "outstanding").length;
             const collected = items.filter((e) => e.collectionStatus === "collected").length;
             return (
               <div
@@ -149,7 +149,7 @@ export default function DashboardCards({ data, initialSearchQuery = "" }: { data
             Total: <strong className="text-[var(--text)]">{data.equipment.length}</strong>
           </p>
           <p className="text-[var(--muted)]">
-            Outstanding: <strong className="text-amber-600">{data.equipment.filter((e) => e.collectionStatus !== "collected").length}</strong>
+            Outstanding: <strong className="text-amber-600">{data.equipment.filter((e) => e.collectionStatus === "outstanding").length}</strong>
           </p>
           <p className="text-[var(--muted)]">
             Collected: <strong className="text-emerald-600">{data.equipment.filter((e) => e.collectionStatus === "collected").length}</strong>
