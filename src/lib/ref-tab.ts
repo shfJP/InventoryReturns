@@ -20,6 +20,8 @@ const SERIAL_FIELD = (process.env.REF_TAB_SERIAL_FIELD ?? "serial").trim();
 const MODEL_FIELD = (process.env.REF_TAB_MODEL_FIELD ?? "title").trim();
 const REF_TAB_TIMEOUT_MS = Math.max(Number(process.env.REF_TAB_REQUEST_TIMEOUT_MS) || 30_000, 5_000);
 const REF_TAB_SYNC_SOURCE = (process.env.REF_TAB_SYNC_SOURCE ?? "loans").trim().toLowerCase();
+const REF_TAB_CHECKIN_ENDPOINT_TEMPLATE = (process.env.REF_TAB_CHECKIN_ENDPOINT_TEMPLATE ?? "loans/{loanId}/checkin").trim();
+const REF_TAB_CHECKOUT_ENDPOINT = (process.env.REF_TAB_CHECKOUT_ENDPOINT ?? "loans").trim();
 
 export type RefTabAssignment = {
   asset_tag: string;
@@ -407,6 +409,33 @@ async function fetchReftabJson(endpoint: string, label: string): Promise<unknown
   return res.json();
 }
 
+async function sendReftabJson(endpoint: string, method: "POST" | "PUT" | "DELETE", label: string, body?: Record<string, unknown>): Promise<unknown> {
+  if (!REF_TAB_PUBLIC || !REF_TAB_SECRET) {
+    throw new Error("Reftab is not configured. Set REF_TAB_API_PUBLIC_KEY and REF_TAB_API_SECRET_KEY.");
+  }
+
+  const cleanEndpoint = endpoint.startsWith("/") ? endpoint.slice(1) : endpoint;
+  const fullUrl = `${REF_TAB_URL}/${cleanEndpoint}`;
+  const bodyText = body ? JSON.stringify(body) : "";
+  const headers = signReftabRequest(fullUrl, method, bodyText);
+  const res = await fetchWithTimeout(
+    fullUrl,
+    { method, headers, body: bodyText || undefined, cache: "no-store" },
+    REF_TAB_TIMEOUT_MS,
+    label
+  );
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`${label} returned ${res.status}: ${text}`);
+  }
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { ok: true, text };
+  }
+}
+
 function idSetHas(idSet: Set<string>, match: string): boolean {
   if (idSet.has(match)) return true;
   const lower = match.toLowerCase();
@@ -695,6 +724,111 @@ function assignmentsFromLoan(loan: Record<string, unknown>, assignee: string, ma
 
   if (out.length === 0) pushLoanAsset(out, loan, assignee, managerInfo);
   return out;
+}
+
+function loanIdFromRecord(loan: Record<string, unknown>): string | undefined {
+  return firstString(loan, ["loanId", "loan_id", "lid", "id", "loan.id", "loan.lid", "_id"]);
+}
+
+function sameReftabAsset(asset: RefTabAssignment, target: { assetTag: string; aid?: string | null }): boolean {
+  const assetTag = normalizeKey(asset.asset_tag);
+  const aid = normalizeKey(asset.aid);
+  const targetAssetTag = normalizeKey(target.assetTag);
+  const targetAid = normalizeKey(target.aid);
+  return Boolean(
+    (targetAssetTag && assetTag === targetAssetTag) ||
+    (targetAid && aid === targetAid) ||
+    (targetAid && assetTag === targetAid) ||
+    (targetAssetTag && aid === targetAssetTag)
+  );
+}
+
+async function findCurrentLoanForAsset(target: { assetTag: string; aid?: string | null }): Promise<{ loanId: string; assignment: RefTabAssignment } | null> {
+  const loaneeMaps = buildLoaneeMaps(await fetchAllReftabLoanees());
+  const limit = ASSETS_LIMIT;
+  let offset = 0;
+
+  while (offset < 500_000) {
+    const loans = listFromResponse(await fetchReftabJson(`loans?limit=${limit}&offset=${offset}&status=out`, `Reftab loans offset ${offset}`));
+    if (loans.length === 0) break;
+
+    for (const loan of loans) {
+      if (!isCurrentLoanRecord(loan)) continue;
+      const loanId = loanIdFromRecord(loan);
+      const assignee = getLoanAssignee(loan, loaneeMaps);
+      if (!loanId || !assignee) continue;
+      const managerInfo = combineManagerInfo(
+        managerInfoFromLoanee(loaneeFromRecord(loan, loaneeMaps)),
+        managerInfoFromRecord(loan)
+      );
+      const assignment = assignmentsFromLoan(loan, assignee, managerInfo).find((item) => sameReftabAsset(item, target));
+      if (assignment) return { loanId, assignment };
+    }
+
+    if (loans.length < limit) break;
+    offset += limit;
+  }
+
+  return null;
+}
+
+function loaneeMatches(loanee: ReftabLoanee, user: { employeeId: string; email: string }): boolean {
+  const email = normalizeKey(user.email);
+  const employeeId = normalizeKey(user.employeeId);
+  const loaneeEmail = normalizeKey(loanee.email);
+  const uid = normalizeKey(valueToString(loanee.uid));
+  const lnid = normalizeKey(valueToString(loanee.lnid));
+  return Boolean(
+    (email && loaneeEmail === email) ||
+    (employeeId && uid === employeeId) ||
+    (employeeId && lnid === employeeId)
+  );
+}
+
+async function findLoaneeForUser(user: { employeeId: string; email: string }): Promise<ReftabLoanee | null> {
+  const loanees = await fetchAllReftabLoanees();
+  return loanees.find((loanee) => loaneeMatches(loanee, user)) ?? null;
+}
+
+function checkinEndpoint(loanId: string): string {
+  return REF_TAB_CHECKIN_ENDPOINT_TEMPLATE
+    .replace(/\{loanId\}/g, encodeURIComponent(loanId))
+    .replace(/\{id\}/g, encodeURIComponent(loanId));
+}
+
+export type ReftabOwnerReconciliationInput = {
+  assetTag: string;
+  aid?: string | null;
+  newOwnerEmployeeId: string;
+  newOwnerEmail: string;
+  note?: string;
+};
+
+export async function reconcileReftabAssetOwner(input: ReftabOwnerReconciliationInput): Promise<{ loanId: string; loaneeId: string }> {
+  const currentLoan = await findCurrentLoanForAsset({ assetTag: input.assetTag, aid: input.aid });
+  if (!currentLoan) {
+    throw new Error(`Could not find an active Reftab loan for asset ${input.assetTag}. Run Reftab sync and try again.`);
+  }
+
+  const newLoanee = await findLoaneeForUser({ employeeId: input.newOwnerEmployeeId, email: input.newOwnerEmail });
+  const loaneeId = valueToString(newLoanee?.lnid) ?? valueToString(newLoanee?.uid);
+  if (!loaneeId) {
+    throw new Error(`Could not find a Reftab loanee for ${input.newOwnerEmail || input.newOwnerEmployeeId}.`);
+  }
+
+  const aid = input.aid ?? currentLoan.assignment.aid ?? input.assetTag;
+  const note = input.note ?? `Owner reconciliation approved from NinjaOne for ${input.assetTag}.`;
+  await sendReftabJson(checkinEndpoint(currentLoan.loanId), "POST", `Reftab check-in loan ${currentLoan.loanId}`, {
+    aids: [aid],
+    notes: note,
+  });
+  await sendReftabJson(REF_TAB_CHECKOUT_ENDPOINT, "POST", `Reftab check-out asset ${input.assetTag}`, {
+    lnid: loaneeId,
+    aids: [aid],
+    notes: note,
+  });
+
+  return { loanId: currentLoan.loanId, loaneeId };
 }
 
 /**
