@@ -85,6 +85,28 @@ function formatDate(value: string | null) {
   return date.toLocaleString();
 }
 
+async function postJsonWithTimeout(body: Record<string, unknown>) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 60_000);
+  try {
+    const res = await fetch("/api/admin/owner-reconciliation", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const data = await res.json().catch(() => ({}));
+    return { res, data };
+  } catch (e) {
+    if (e instanceof Error && e.name === "AbortError") {
+      throw new Error("Reftab action timed out after 60 seconds. Check Reftab, then refresh this page.");
+    }
+    throw e;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 function ownerStatusLabel(status: MissingReftabAssetRow["ownerStatus"]) {
   return {
     active: "Active Entra owner",
@@ -177,16 +199,14 @@ export default function OwnerReconciliationPage() {
     setError(null);
     setMessage(null);
     try {
-      const res = await fetch("/api/admin/owner-reconciliation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id }),
-      });
-      const data = await res.json();
+      const { res, data } = await postJsonWithTimeout({ assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id });
       if (!res.ok) throw new Error(data.error ?? "Failed to approve owner change");
-      setRows(data.rows);
-      setMissingReftabRows(data.missingReftabRows);
-      setSummary(data.summary);
+      setRows((prev) => prev.filter((item) => item.id !== row.id));
+      setSummary((prev) => prev ? {
+        ...prev,
+        mismatchCount: Math.max(0, prev.mismatchCount - 1),
+        alreadyMatchedOwnerCount: prev.alreadyMatchedOwnerCount + 1,
+      } : prev);
       setMessage(`${row.assetTag} reassigned to ${row.ninjaOwner.displayName}.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to approve owner change");
@@ -204,16 +224,23 @@ export default function OwnerReconciliationPage() {
     setError(null);
     setMessage(null);
     try {
-      const res = await fetch("/api/admin/owner-reconciliation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "add-missing-asset", assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id }),
+      const { res, data } = await postJsonWithTimeout({
+        action: "add-missing-asset",
+        assetTag: row.assetTag,
+        ninjaDeviceId: row.ninjaDevice.id,
+        serial: row.serial,
+        model: row.model,
+        title: row.title,
+        ownerEmployeeId: row.ninjaOwner.employeeId,
+        ownerEmail: row.ninjaOwner.email,
       });
-      const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to add Reftab asset");
-      setRows(data.rows);
-      setMissingReftabRows(data.missingReftabRows);
-      setSummary(data.summary);
+      setMissingReftabRows((prev) => prev.filter((item) => item.id !== row.id));
+      setSummary((prev) => prev ? {
+        ...prev,
+        missingReftabCount: Math.max(0, prev.missingReftabCount - 1),
+        equipmentCount: prev.equipmentCount + 1,
+      } : prev);
       setMessage(`${row.assetTag} added to Reftab for ${row.ninjaOwner.displayName}.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to add Reftab asset");

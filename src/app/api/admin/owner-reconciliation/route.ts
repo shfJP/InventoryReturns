@@ -11,6 +11,11 @@ const approveSchema = z.object({
   action: z.enum(["reassign-owner", "add-missing-asset"]).default("reassign-owner"),
   assetTag: z.string().min(1),
   ninjaDeviceId: z.string().min(1),
+  serial: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
+  title: z.string().nullable().optional(),
+  ownerEmployeeId: z.string().min(1).optional(),
+  ownerEmail: z.string().email().optional(),
 });
 
 export async function GET(req: NextRequest) {
@@ -34,12 +39,35 @@ export async function POST(req: NextRequest) {
   }
 
   if (parsed.data.action === "add-missing-asset") {
-    const row = await getMissingReftabAssetRow(parsed.data.ninjaDeviceId);
+    const owner = parsed.data.ownerEmployeeId
+      ? await prisma.user.findUnique({
+          where: { employeeId: parsed.data.ownerEmployeeId },
+          select: { employeeId: true, email: true, displayName: true, isActive: true },
+        })
+      : null;
+    const row = owner
+      ? {
+          assetTag: parsed.data.assetTag,
+          serial: parsed.data.serial ?? null,
+          model: parsed.data.model ?? null,
+          title: parsed.data.title ?? null,
+          ninjaOwner: owner,
+          ninjaDevice: { id: parsed.data.ninjaDeviceId },
+        }
+      : await getMissingReftabAssetRow(parsed.data.ninjaDeviceId);
+
     if (!row || row.assetTag !== parsed.data.assetTag) {
       return NextResponse.json({ error: "No current NinjaOne device missing from Reftab was found for this request." }, { status: 404 });
     }
     if (!row.ninjaOwner?.isActive) {
       return NextResponse.json({ error: "This NinjaOne device does not resolve to an active Entra owner yet." }, { status: 400 });
+    }
+    const existingAssignment = await prisma.equipmentAssignment.findFirst({
+      where: { assetTag: row.assetTag },
+      select: { id: true },
+    });
+    if (existingAssignment) {
+      return NextResponse.json({ error: "This asset now exists in Reftab sync data. Refresh the page before retrying." }, { status: 409 });
     }
 
     try {
@@ -80,8 +108,7 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      const refreshed = await getOwnerReconciliationResult();
-      return NextResponse.json({ ok: true, result, ...refreshed, count: refreshed.rows.length });
+      return NextResponse.json({ ok: true, result, completed: { action: "add-missing-asset", assetTag: row.assetTag, ninjaDeviceId: parsed.data.ninjaDeviceId } });
     } catch (e) {
       return NextResponse.json({ error: e instanceof Error ? e.message : "Missing asset creation failed" }, { status: 500 });
     }
@@ -136,8 +163,7 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    const refreshed = await getOwnerReconciliationResult();
-    return NextResponse.json({ ok: true, result, ...refreshed, count: refreshed.rows.length });
+    return NextResponse.json({ ok: true, result, completed: { action: "reassign-owner", assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id } });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Owner reconciliation failed" }, { status: 500 });
   }
