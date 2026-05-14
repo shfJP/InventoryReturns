@@ -24,6 +24,8 @@ const REF_TAB_CHECKIN_ENDPOINT_TEMPLATE = (process.env.REF_TAB_CHECKIN_ENDPOINT_
 const REF_TAB_CHECKOUT_ENDPOINT = (process.env.REF_TAB_CHECKOUT_ENDPOINT ?? "loans").trim();
 const REF_TAB_CREATE_ASSET_ENDPOINT = (process.env.REF_TAB_CREATE_ASSET_ENDPOINT ?? "assets").trim();
 const REF_TAB_CREATE_ASSET_CATEGORY_ID = (process.env.REF_TAB_CREATE_ASSET_CATEGORY_ID ?? "").trim();
+const REF_TAB_CREATE_ASSET_LAPTOP_CATEGORY_ID = (process.env.REF_TAB_CREATE_ASSET_LAPTOP_CATEGORY_ID ?? "").trim();
+const REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID = (process.env.REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID ?? "").trim();
 const REF_TAB_CREATE_ASSET_LOCATION_ID = (process.env.REF_TAB_CREATE_ASSET_LOCATION_ID ?? "67497").trim();
 
 export type RefTabAssignment = {
@@ -388,7 +390,7 @@ function listFromResponse(data: unknown): Record<string, unknown>[] {
   }
   if (data != null && typeof data === "object") {
     const record = data as Record<string, unknown>;
-    for (const key of ["data", "items", "results", "loans", "assets", "loanees"]) {
+    for (const key of ["data", "items", "results", "loans", "assets", "loanees", "categories"]) {
       const value = record[key];
       if (Array.isArray(value)) {
         return value.filter((item): item is Record<string, unknown> => item != null && typeof item === "object" && !Array.isArray(item));
@@ -880,6 +882,7 @@ function tokenSet(value: string | null | undefined): Set<string> {
   for (const token of value?.toLowerCase().match(/[a-z0-9]+/g) ?? []) {
     if (["the", "and", "for", "with", "asset", "device"].includes(token)) continue;
     if (token.length >= 3 || token === "lt" || token === "tb") tokens.add(token);
+    if (token.length > 4 && token.endsWith("s")) tokens.add(token.slice(0, -1));
     if (token === "lt") tokens.add("laptop");
     if (token === "tb") tokens.add("tablet");
   }
@@ -899,7 +902,64 @@ function numericId(value: string | undefined): number | string | undefined {
   return /^\d+$/.test(value) ? Number(value) : value;
 }
 
+function explicitCreateAssetCategoryId(input: ReftabCreateAndAssignInput): string | undefined {
+  const tokens = tokenSet([input.title, input.model, input.assetTag, input.serial].filter(Boolean).join(" "));
+  if ((tokens.has("tb") || tokens.has("tablet")) && REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID) {
+    return REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID;
+  }
+  if ((tokens.has("lt") || tokens.has("laptop")) && REF_TAB_CREATE_ASSET_LAPTOP_CATEGORY_ID) {
+    return REF_TAB_CREATE_ASSET_LAPTOP_CATEGORY_ID;
+  }
+  return undefined;
+}
+
+function categoryFromRecord(record: Record<string, unknown>): { categoryId: string; name: string } | null {
+  const categoryId = firstString(record, ["cid", "id", "categoryId", "catId", "category.id", "cat.id"]);
+  const name = firstString(record, ["name", "title", "catName", "categoryName", "category.name", "cat.name"]) ?? categoryId;
+  if (!categoryId || !name) return null;
+  return { categoryId, name };
+}
+
+async function fetchReftabCategories(): Promise<Array<{ categoryId: string; name: string }>> {
+  const limit = 500;
+  let offset = 0;
+  const categories: Array<{ categoryId: string; name: string }> = [];
+
+  while (offset < 50_000) {
+    let list: Record<string, unknown>[];
+    try {
+      list = listFromResponse(await fetchReftabJson(`categories?limit=${limit}&offset=${offset}`, `Reftab categories offset ${offset}`));
+    } catch (e) {
+      console.warn(`[reftab] Category fetch failed: ${e instanceof Error ? e.message : String(e)}`);
+      break;
+    }
+    if (list.length === 0) break;
+    for (const item of list) {
+      const category = categoryFromRecord(item);
+      if (category) categories.push(category);
+    }
+    if (list.length < limit) break;
+    offset += limit;
+  }
+
+  return categories;
+}
+
+async function inferCreateAssetCategoryIdFromReftab(input: ReftabCreateAndAssignInput): Promise<string | undefined> {
+  const inputTokens = tokenSet([input.title, input.model, input.assetTag, input.serial].filter(Boolean).join(" "));
+  const ranked = (await fetchReftabCategories())
+    .map((category) => ({
+      ...category,
+      score: tokenOverlapScore(inputTokens, tokenSet(category.name)),
+    }))
+    .sort((a, b) => b.score - a.score);
+  return ranked.find((category) => category.score > 0)?.categoryId;
+}
+
 async function inferCreateAssetCategoryId(input: ReftabCreateAndAssignInput): Promise<string | undefined> {
+  const explicitCategoryId = explicitCreateAssetCategoryId(input);
+  if (explicitCategoryId) return explicitCategoryId;
+
   const rows = await prisma.equipmentAssignment.findMany({
     select: {
       catName: true,
@@ -927,7 +987,11 @@ async function inferCreateAssetCategoryId(input: ReftabCreateAndAssignInput): Pr
   }
 
   const ranked = Array.from(categoryScores.values()).sort((a, b) => b.score - a.score || b.count - a.count);
-  return ranked[0]?.categoryId ?? (REF_TAB_CREATE_ASSET_CATEGORY_ID || undefined);
+  const syncedCategoryId = ranked[0]?.categoryId;
+  if (syncedCategoryId) return syncedCategoryId;
+
+  const liveCategoryId = await inferCreateAssetCategoryIdFromReftab(input);
+  return liveCategoryId ?? (REF_TAB_CREATE_ASSET_CATEGORY_ID || undefined);
 }
 
 async function inferCreateAssetLocationId(input: ReftabCreateAndAssignInput): Promise<string | undefined> {
@@ -978,6 +1042,11 @@ export async function createAndAssignReftabAsset(input: ReftabCreateAndAssignInp
   if (input.model) createBody.model = input.model;
   const categoryId = await inferCreateAssetCategoryId(input);
   const numericCategoryId = numericId(categoryId);
+  if (numericCategoryId === undefined) {
+    throw new Error(
+      "Could not determine a Reftab category id for this new asset. Set REF_TAB_CREATE_ASSET_LAPTOP_CATEGORY_ID, REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID, or REF_TAB_CREATE_ASSET_CATEGORY_ID."
+    );
+  }
   if (numericCategoryId !== undefined) createBody.cid = numericCategoryId;
   const locationId = await inferCreateAssetLocationId(input);
   const numericLocationId = numericId(locationId);
