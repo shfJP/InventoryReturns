@@ -852,6 +852,68 @@ export type ReftabCreateAndAssignInput = {
   note?: string;
 };
 
+function parseDetailsJson(value: string | null | undefined): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed != null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function categoryIdFromDetailsJson(value: string | null | undefined): string | undefined {
+  const details = parseDetailsJson(value);
+  return firstString(details, ["categoryId", "cid", "catId", "category.id", "cat.id"]);
+}
+
+function tokenSet(value: string | null | undefined): Set<string> {
+  return new Set(
+    (value?.toLowerCase().match(/[a-z0-9]+/g) ?? [])
+      .filter((token) => token.length >= 3)
+      .filter((token) => !["the", "and", "for", "with", "asset", "device"].includes(token))
+  );
+}
+
+function tokenOverlapScore(a: Set<string>, b: Set<string>): number {
+  let score = 0;
+  for (const token of a) {
+    if (b.has(token)) score += 1;
+  }
+  return score;
+}
+
+async function inferCreateAssetCategoryId(input: ReftabCreateAndAssignInput): Promise<string | undefined> {
+  const rows = await prisma.equipmentAssignment.findMany({
+    select: {
+      catName: true,
+      title: true,
+      model: true,
+      assetTag: true,
+      detailsJson: true,
+    },
+  });
+  const inputTokens = tokenSet([input.title, input.model, input.assetTag, input.serial].filter(Boolean).join(" "));
+  const categoryScores = new Map<string, { categoryId: string; catName: string | null; count: number; score: number }>();
+
+  for (const row of rows) {
+    const categoryId = categoryIdFromDetailsJson(row.detailsJson);
+    if (!categoryId) continue;
+
+    const existing = categoryScores.get(categoryId) ?? { categoryId, catName: row.catName, count: 0, score: 0 };
+    existing.count += 1;
+    const rowTokens = tokenSet([row.title, row.model, row.assetTag, row.catName].filter(Boolean).join(" "));
+    existing.score += tokenOverlapScore(inputTokens, rowTokens);
+
+    const categoryTokens = tokenSet(row.catName);
+    existing.score += tokenOverlapScore(inputTokens, categoryTokens) * 2;
+    categoryScores.set(categoryId, existing);
+  }
+
+  const ranked = Array.from(categoryScores.values()).sort((a, b) => b.score - a.score || b.count - a.count);
+  return ranked[0]?.categoryId ?? (REF_TAB_CREATE_ASSET_CATEGORY_ID || undefined);
+}
+
 export async function createAndAssignReftabAsset(input: ReftabCreateAndAssignInput): Promise<{ aid: string; loaneeId: string }> {
   const newLoanee = await findLoaneeForUser({ employeeId: input.newOwnerEmployeeId, email: input.newOwnerEmail });
   const loaneeId = valueToString(newLoanee?.lnid) ?? valueToString(newLoanee?.uid);
@@ -867,7 +929,8 @@ export async function createAndAssignReftabAsset(input: ReftabCreateAndAssignInp
     notes: note,
   };
   if (input.model) createBody.model = input.model;
-  if (REF_TAB_CREATE_ASSET_CATEGORY_ID) createBody.cid = REF_TAB_CREATE_ASSET_CATEGORY_ID;
+  const categoryId = await inferCreateAssetCategoryId(input);
+  if (categoryId) createBody.cid = categoryId;
 
   const created = await sendReftabJson(REF_TAB_CREATE_ASSET_ENDPOINT, "POST", `Reftab create asset ${input.assetTag}`, createBody);
   const aid = createdAssetIdFromResponse(created) ?? input.assetTag;
