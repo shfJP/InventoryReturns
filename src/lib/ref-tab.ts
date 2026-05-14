@@ -597,8 +597,8 @@ async function fetchAllReftabLoanees(): Promise<ReftabLoanee[]> {
     for (const item of list) {
       out.push({
         email: firstString(item, ["email", "mail", "user.email", "loanee.email"]),
-        uid: firstString(item, ["uid", "id", "user.uid"]),
-        lnid: firstString(item, ["lnid", "loaneeId", "loanee.lnid"]),
+        uid: firstString(item, ["uid", "user.uid"]),
+        lnid: firstString(item, ["lnid", "loaneeId", "loanee_id", "id", "_id", "loanee.lnid", "loanee.id"]),
         ...managerInfoFromRecord(item),
       });
     }
@@ -785,16 +785,22 @@ function loaneeMatches(loanee: ReftabLoanee, user: { employeeId: string; email: 
   const loaneeEmail = normalizeKey(loanee.email);
   const uid = normalizeKey(valueToString(loanee.uid));
   const lnid = normalizeKey(valueToString(loanee.lnid));
-  return Boolean(
-    (email && loaneeEmail === email) ||
-    (employeeId && uid === employeeId) ||
-    (employeeId && lnid === employeeId)
-  );
+  if (email && loaneeEmail === email) return true;
+  return Boolean(lnid && employeeId && uid === employeeId);
 }
 
 async function findLoaneeForUser(user: { employeeId: string; email: string }): Promise<ReftabLoanee | null> {
   const loanees = await fetchAllReftabLoanees();
-  return loanees.find((loanee) => loaneeMatches(loanee, user)) ?? null;
+  const matches = loanees.filter((loanee) => loaneeMatches(loanee, user));
+  return matches.find((loanee) => valueToString(loanee.lnid)) ?? matches[0] ?? null;
+}
+
+function checkoutLoaneeIdFromRecord(loanee: ReftabLoanee | null, user: { employeeId: string; email: string }): string {
+  const lnid = valueToString(loanee?.lnid);
+  if (!lnid) {
+    throw new Error(`Could not find a Reftab loanee id (lnid) for ${user.email || user.employeeId}.`);
+  }
+  return lnid;
 }
 
 function checkinEndpoint(loanId: string): string {
@@ -827,10 +833,7 @@ export async function reconcileReftabAssetOwner(input: ReftabOwnerReconciliation
   }
 
   const newLoanee = await findLoaneeForUser({ employeeId: input.newOwnerEmployeeId, email: input.newOwnerEmail });
-  const loaneeId = valueToString(newLoanee?.lnid) ?? valueToString(newLoanee?.uid);
-  if (!loaneeId) {
-    throw new Error(`Could not find a Reftab loanee for ${input.newOwnerEmail || input.newOwnerEmployeeId}.`);
-  }
+  const loaneeId = checkoutLoaneeIdFromRecord(newLoanee, { employeeId: input.newOwnerEmployeeId, email: input.newOwnerEmail });
   const checkoutLoaneeId = numericRequiredId(loaneeId, "Reftab loanee id");
 
   const aid = input.aid ?? currentLoan.assignment.aid ?? input.assetTag;
@@ -1034,10 +1037,7 @@ async function inferCreateAssetLocationId(input: ReftabCreateAndAssignInput): Pr
 
 export async function createAndAssignReftabAsset(input: ReftabCreateAndAssignInput): Promise<{ aid: string; loaneeId: string }> {
   const newLoanee = await findLoaneeForUser({ employeeId: input.newOwnerEmployeeId, email: input.newOwnerEmail });
-  const loaneeId = valueToString(newLoanee?.lnid) ?? valueToString(newLoanee?.uid);
-  if (!loaneeId) {
-    throw new Error(`Could not find a Reftab loanee for ${input.newOwnerEmail || input.newOwnerEmployeeId}.`);
-  }
+  const loaneeId = checkoutLoaneeIdFromRecord(newLoanee, { employeeId: input.newOwnerEmployeeId, email: input.newOwnerEmail });
   const checkoutLoaneeId = numericRequiredId(loaneeId, "Reftab loanee id");
 
   const note = input.note ?? `Created from NinjaOne reconciliation for ${input.assetTag}.`;
