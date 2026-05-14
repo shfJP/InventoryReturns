@@ -894,6 +894,11 @@ function tokenOverlapScore(a: Set<string>, b: Set<string>): number {
   return score;
 }
 
+function numericId(value: string | undefined): number | string | undefined {
+  if (!value) return undefined;
+  return /^\d+$/.test(value) ? Number(value) : value;
+}
+
 async function inferCreateAssetCategoryId(input: ReftabCreateAndAssignInput): Promise<string | undefined> {
   const rows = await prisma.equipmentAssignment.findMany({
     select: {
@@ -972,9 +977,11 @@ export async function createAndAssignReftabAsset(input: ReftabCreateAndAssignInp
   };
   if (input.model) createBody.model = input.model;
   const categoryId = await inferCreateAssetCategoryId(input);
-  if (categoryId) createBody.cid = categoryId;
+  const numericCategoryId = numericId(categoryId);
+  if (numericCategoryId !== undefined) createBody.cid = numericCategoryId;
   const locationId = await inferCreateAssetLocationId(input);
-  if (locationId) createBody.clid = locationId;
+  const numericLocationId = numericId(locationId);
+  if (numericLocationId !== undefined) createBody.clid = numericLocationId;
 
   const created = await sendReftabJson(REF_TAB_CREATE_ASSET_ENDPOINT, "POST", `Reftab create asset ${input.assetTag}`, createBody);
   const aid = createdAssetIdFromResponse(created) ?? input.assetTag;
