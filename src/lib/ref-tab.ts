@@ -24,6 +24,7 @@ const REF_TAB_CHECKIN_ENDPOINT_TEMPLATE = (process.env.REF_TAB_CHECKIN_ENDPOINT_
 const REF_TAB_CHECKOUT_ENDPOINT = (process.env.REF_TAB_CHECKOUT_ENDPOINT ?? "loans").trim();
 const REF_TAB_CREATE_ASSET_ENDPOINT = (process.env.REF_TAB_CREATE_ASSET_ENDPOINT ?? "assets").trim();
 const REF_TAB_CREATE_ASSET_CATEGORY_ID = (process.env.REF_TAB_CREATE_ASSET_CATEGORY_ID ?? "").trim();
+const REF_TAB_CREATE_ASSET_LOCATION_ID = (process.env.REF_TAB_CREATE_ASSET_LOCATION_ID ?? "67497").trim();
 
 export type RefTabAssignment = {
   asset_tag: string;
@@ -348,6 +349,7 @@ function assetDetails(record: Record<string, unknown>): {
     "fields.categoryName",
   ]) ?? likelyCategoryFromFields(record);
   const categoryId = firstString(record, ["cid", "categoryId", "catId", "category.id", "cat.id", "asset.cid", "asset.categoryId"]);
+  const locationId = firstString(record, ["clid", "locationId", "locId", "location.id", "asset.clid", "asset.locationId", "asset.location.id"]);
   const locationName = firstString(record, ["locationName", "location.name", "location", "clName", "asset.locationName", "asset.location.name"]);
   const statusName = firstString(record, ["statusName", "status.name", "status", "asset.statusName", "asset.status.name", "loan.status"]);
   return {
@@ -367,6 +369,7 @@ function assetDetails(record: Record<string, unknown>): {
       title,
       catName,
       categoryId,
+      locationId,
       locationName,
       statusName,
       manufacturer: firstString(record, ["manufacturer", "make", "asset.manufacturer", "asset.make"]),
@@ -867,12 +870,20 @@ function categoryIdFromDetailsJson(value: string | null | undefined): string | u
   return firstString(details, ["categoryId", "cid", "catId", "category.id", "cat.id"]);
 }
 
+function locationIdFromDetailsJson(value: string | null | undefined): string | undefined {
+  const details = parseDetailsJson(value);
+  return firstString(details, ["locationId", "clid", "clId", "locId", "location.id", "asset.locationId", "asset.clid"]);
+}
+
 function tokenSet(value: string | null | undefined): Set<string> {
-  return new Set(
-    (value?.toLowerCase().match(/[a-z0-9]+/g) ?? [])
-      .filter((token) => token.length >= 3)
-      .filter((token) => !["the", "and", "for", "with", "asset", "device"].includes(token))
-  );
+  const tokens = new Set<string>();
+  for (const token of value?.toLowerCase().match(/[a-z0-9]+/g) ?? []) {
+    if (["the", "and", "for", "with", "asset", "device"].includes(token)) continue;
+    if (token.length >= 3 || token === "lt" || token === "tb") tokens.add(token);
+    if (token === "lt") tokens.add("laptop");
+    if (token === "tb") tokens.add("tablet");
+  }
+  return tokens;
 }
 
 function tokenOverlapScore(a: Set<string>, b: Set<string>): number {
@@ -914,6 +925,37 @@ async function inferCreateAssetCategoryId(input: ReftabCreateAndAssignInput): Pr
   return ranked[0]?.categoryId ?? (REF_TAB_CREATE_ASSET_CATEGORY_ID || undefined);
 }
 
+async function inferCreateAssetLocationId(input: ReftabCreateAndAssignInput): Promise<string | undefined> {
+  const rows = await prisma.equipmentAssignment.findMany({
+    select: {
+      locationName: true,
+      title: true,
+      model: true,
+      assetTag: true,
+      detailsJson: true,
+    },
+  });
+  const inputTokens = tokenSet([input.title, input.model, input.assetTag, input.serial].filter(Boolean).join(" "));
+  const locationScores = new Map<string, { locationId: string; locationName: string | null; count: number; score: number }>();
+
+  for (const row of rows) {
+    const locationId = locationIdFromDetailsJson(row.detailsJson);
+    if (!locationId) continue;
+
+    const existing = locationScores.get(locationId) ?? { locationId, locationName: row.locationName, count: 0, score: 0 };
+    existing.count += 1;
+    const rowTokens = tokenSet([row.title, row.model, row.assetTag, row.locationName].filter(Boolean).join(" "));
+    existing.score += tokenOverlapScore(inputTokens, rowTokens);
+
+    const locationTokens = tokenSet(row.locationName);
+    existing.score += tokenOverlapScore(inputTokens, locationTokens) * 2;
+    locationScores.set(locationId, existing);
+  }
+
+  const ranked = Array.from(locationScores.values()).sort((a, b) => b.score - a.score || b.count - a.count);
+  return REF_TAB_CREATE_ASSET_LOCATION_ID || ranked[0]?.locationId;
+}
+
 export async function createAndAssignReftabAsset(input: ReftabCreateAndAssignInput): Promise<{ aid: string; loaneeId: string }> {
   const newLoanee = await findLoaneeForUser({ employeeId: input.newOwnerEmployeeId, email: input.newOwnerEmail });
   const loaneeId = valueToString(newLoanee?.lnid) ?? valueToString(newLoanee?.uid);
@@ -931,6 +973,8 @@ export async function createAndAssignReftabAsset(input: ReftabCreateAndAssignInp
   if (input.model) createBody.model = input.model;
   const categoryId = await inferCreateAssetCategoryId(input);
   if (categoryId) createBody.cid = categoryId;
+  const locationId = await inferCreateAssetLocationId(input);
+  if (locationId) createBody.clid = locationId;
 
   const created = await sendReftabJson(REF_TAB_CREATE_ASSET_ENDPOINT, "POST", `Reftab create asset ${input.assetTag}`, createBody);
   const aid = createdAssetIdFromResponse(created) ?? input.assetTag;
