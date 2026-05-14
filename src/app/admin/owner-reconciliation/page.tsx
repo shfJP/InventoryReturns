@@ -85,6 +85,21 @@ function formatDate(value: string | null) {
   return date.toLocaleString();
 }
 
+async function readResponseJson(res: Response): Promise<Record<string, unknown>> {
+  const text = await res.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    const preview = text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 240);
+    throw new Error(`Server returned a non-JSON response (${res.status}). ${preview || "No response body."}`);
+  }
+}
+
+function responseErrorMessage(data: Record<string, unknown>, fallback: string): string {
+  return typeof data.error === "string" ? data.error : fallback;
+}
+
 async function postJsonWithTimeout(body: Record<string, unknown>) {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 60_000);
@@ -95,7 +110,10 @@ async function postJsonWithTimeout(body: Record<string, unknown>) {
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-    const data = await res.json().catch(() => ({}));
+    const data = await readResponseJson(res).catch((e) => {
+      if (res.ok) throw e;
+      return { error: e instanceof Error ? e.message : "Server returned a non-JSON response" };
+    });
     return { res, data };
   } catch (e) {
     if (e instanceof Error && e.name === "AbortError") {
@@ -135,8 +153,8 @@ export default function OwnerReconciliationPage() {
 
     fetch("/api/admin/owner-reconciliation")
       .then(async (res) => {
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error ?? "Failed to load owner reconciliation");
+        const data = await readResponseJson(res);
+        if (!res.ok) throw new Error(responseErrorMessage(data, "Failed to load owner reconciliation"));
         return data as ApiResponse;
       })
       .then((data) => {
@@ -200,7 +218,7 @@ export default function OwnerReconciliationPage() {
     setMessage(null);
     try {
       const { res, data } = await postJsonWithTimeout({ assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id });
-      if (!res.ok) throw new Error(data.error ?? "Failed to approve owner change");
+      if (!res.ok) throw new Error(responseErrorMessage(data, "Failed to approve owner change"));
       setRows((prev) => prev.filter((item) => item.id !== row.id));
       setSummary((prev) => prev ? {
         ...prev,
@@ -234,7 +252,7 @@ export default function OwnerReconciliationPage() {
         ownerEmployeeId: row.ninjaOwner.employeeId,
         ownerEmail: row.ninjaOwner.email,
       });
-      if (!res.ok) throw new Error(data.error ?? "Failed to add Reftab asset");
+      if (!res.ok) throw new Error(responseErrorMessage(data, "Failed to add Reftab asset"));
       setMissingReftabRows((prev) => prev.filter((item) => item.id !== row.id));
       setSummary((prev) => prev ? {
         ...prev,

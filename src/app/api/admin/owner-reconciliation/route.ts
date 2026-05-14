@@ -23,8 +23,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const result = await getOwnerReconciliationResult();
-  return NextResponse.json({ ...result, count: result.rows.length });
+  try {
+    const result = await getOwnerReconciliationResult();
+    return NextResponse.json({ ...result, count: result.rows.length });
+  } catch (e) {
+    console.error("[owner-reconciliation] GET failed", e);
+    return NextResponse.json({ error: e instanceof Error ? e.message : "Failed to load owner reconciliation" }, { status: 500 });
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -32,6 +37,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  try {
   const raw = await req.json().catch(() => ({}));
   const parsed = approveSchema.safeParse(raw);
   if (!parsed.success) {
@@ -165,6 +171,10 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true, result, completed: { action: "reassign-owner", assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id } });
   } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : "Owner reconciliation failed" }, { status: 500 });
+  }
+  } catch (e) {
+    console.error("[owner-reconciliation] POST failed", e);
     return NextResponse.json({ error: e instanceof Error ? e.message : "Owner reconciliation failed" }, { status: 500 });
   }
 }
