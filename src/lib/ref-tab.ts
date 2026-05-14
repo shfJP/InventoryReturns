@@ -831,6 +831,7 @@ export async function reconcileReftabAssetOwner(input: ReftabOwnerReconciliation
   if (!loaneeId) {
     throw new Error(`Could not find a Reftab loanee for ${input.newOwnerEmail || input.newOwnerEmployeeId}.`);
   }
+  const checkoutLoaneeId = numericRequiredId(loaneeId, "Reftab loanee id");
 
   const aid = input.aid ?? currentLoan.assignment.aid ?? input.assetTag;
   const note = input.note ?? `Owner reconciliation approved from NinjaOne for ${input.assetTag}.`;
@@ -839,7 +840,7 @@ export async function reconcileReftabAssetOwner(input: ReftabOwnerReconciliation
     notes: note,
   });
   await sendReftabJson(REF_TAB_CHECKOUT_ENDPOINT, "POST", `Reftab check-out asset ${input.assetTag}`, {
-    lnid: loaneeId,
+    lnid: checkoutLoaneeId,
     aids: [aid],
     notes: note,
   });
@@ -900,6 +901,12 @@ function tokenOverlapScore(a: Set<string>, b: Set<string>): number {
 function numericId(value: string | undefined): number | string | undefined {
   if (!value) return undefined;
   return /^\d+$/.test(value) ? Number(value) : value;
+}
+
+function numericRequiredId(value: string | undefined, label: string): number {
+  if (!value) throw new Error(`${label} is missing.`);
+  if (!/^\d+$/.test(value)) throw new Error(`${label} must be numeric.`);
+  return Number(value);
 }
 
 function explicitCreateAssetCategoryId(input: ReftabCreateAndAssignInput): string | undefined {
@@ -1031,6 +1038,7 @@ export async function createAndAssignReftabAsset(input: ReftabCreateAndAssignInp
   if (!loaneeId) {
     throw new Error(`Could not find a Reftab loanee for ${input.newOwnerEmail || input.newOwnerEmployeeId}.`);
   }
+  const checkoutLoaneeId = numericRequiredId(loaneeId, "Reftab loanee id");
 
   const note = input.note ?? `Created from NinjaOne reconciliation for ${input.assetTag}.`;
   const createBody: Record<string, unknown> = {
@@ -1055,7 +1063,7 @@ export async function createAndAssignReftabAsset(input: ReftabCreateAndAssignInp
   const created = await sendReftabJson(REF_TAB_CREATE_ASSET_ENDPOINT, "POST", `Reftab create asset ${input.assetTag}`, createBody);
   const aid = createdAssetIdFromResponse(created) ?? input.assetTag;
   await sendReftabJson(REF_TAB_CHECKOUT_ENDPOINT, "POST", `Reftab check-out asset ${input.assetTag}`, {
-    lnid: loaneeId,
+    lnid: checkoutLoaneeId,
     aids: [aid],
     notes: note,
   });
