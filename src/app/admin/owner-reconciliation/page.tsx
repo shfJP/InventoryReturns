@@ -39,9 +39,33 @@ type OwnerReconciliationRow = {
   confidence: number;
 };
 
+type MissingReftabAssetRow = {
+  id: string;
+  assetTag: string;
+  serial: string | null;
+  model: string | null;
+  title: string | null;
+  ninjaOwner: UserSummary;
+  ninjaOwnerRaw: string;
+  ninjaDevice: OwnerReconciliationRow["ninjaDevice"];
+  identityReason: string;
+};
+
 type ApiResponse = {
   rows: OwnerReconciliationRow[];
+  missingReftabRows: MissingReftabAssetRow[];
   count: number;
+  summary: {
+    equipmentCount: number;
+    ninjaDeviceCount: number;
+    matchedDeviceCount: number;
+    missingReftabCount: number;
+    missingNinjaOwnerCount: number;
+    unresolvedNinjaOwnerCount: number;
+    inactiveNinjaOwnerCount: number;
+    alreadyMatchedOwnerCount: number;
+    mismatchCount: number;
+  };
 };
 
 function ownerLabel(owner: UserSummary | null, fallbackEmployeeId: string) {
@@ -49,7 +73,7 @@ function ownerLabel(owner: UserSummary | null, fallbackEmployeeId: string) {
   return `${owner.displayName} (${owner.employeeId})`;
 }
 
-function deviceLabel(row: OwnerReconciliationRow) {
+function deviceLabel(row: { ninjaDevice: OwnerReconciliationRow["ninjaDevice"] }) {
   return row.ninjaDevice.displayName ?? row.ninjaDevice.systemName ?? row.ninjaDevice.dnsName ?? row.ninjaDevice.netbiosName ?? row.ninjaDevice.id;
 }
 
@@ -68,6 +92,8 @@ export default function OwnerReconciliationPage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [summary, setSummary] = useState<ApiResponse["summary"] | null>(null);
+  const [missingReftabRows, setMissingReftabRows] = useState<MissingReftabAssetRow[]>([]);
 
   useEffect(() => {
     if (!isLoggedIn()) {
@@ -81,7 +107,11 @@ export default function OwnerReconciliationPage() {
         if (!res.ok) throw new Error(data.error ?? "Failed to load owner reconciliation");
         return data as ApiResponse;
       })
-      .then((data) => setRows(data.rows))
+      .then((data) => {
+        setRows(data.rows);
+        setMissingReftabRows(data.missingReftabRows);
+        setSummary(data.summary);
+      })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load owner reconciliation"))
       .finally(() => setLoading(false));
   }, [router]);
@@ -109,6 +139,26 @@ export default function OwnerReconciliationPage() {
     );
   }, [query, rows]);
 
+  const filteredMissingRows = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return missingReftabRows;
+    return missingReftabRows.filter((row) =>
+      [
+        row.assetTag,
+        row.serial,
+        row.model,
+        row.title,
+        row.ninjaOwner.displayName,
+        row.ninjaOwner.email,
+        row.ninjaOwner.employeeId,
+        row.ninjaOwnerRaw,
+        deviceLabel(row),
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(normalized))
+    );
+  }, [query, missingReftabRows]);
+
   async function approve(row: OwnerReconciliationRow) {
     const confirmed = window.confirm(`Move ${row.assetTag} from ${ownerLabel(row.reftabOwner, row.reftabOwnerEmployeeId)} to ${ownerLabel(row.ninjaOwner, row.ninjaOwner.employeeId)} in Reftab?`);
     if (!confirmed) return;
@@ -125,9 +175,37 @@ export default function OwnerReconciliationPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to approve owner change");
       setRows(data.rows);
+      setMissingReftabRows(data.missingReftabRows);
+      setSummary(data.summary);
       setMessage(`${row.assetTag} reassigned to ${row.ninjaOwner.displayName}.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to approve owner change");
+    } finally {
+      setApprovingId(null);
+    }
+  }
+
+  async function addMissing(row: MissingReftabAssetRow) {
+    const confirmed = window.confirm(`Add ${row.assetTag} to Reftab and assign it to ${ownerLabel(row.ninjaOwner, row.ninjaOwner.employeeId)}?`);
+    if (!confirmed) return;
+
+    setApprovingId(row.id);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/admin/owner-reconciliation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "add-missing-asset", assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to add Reftab asset");
+      setRows(data.rows);
+      setMissingReftabRows(data.missingReftabRows);
+      setSummary(data.summary);
+      setMessage(`${row.assetTag} added to Reftab for ${row.ninjaOwner.displayName}.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to add Reftab asset");
     } finally {
       setApprovingId(null);
     }
@@ -144,7 +222,7 @@ export default function OwnerReconciliationPage() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-[var(--text)]">Owner Reconciliation</h1>
-          <p className="text-[var(--muted)]">{rows.length} NinjaOne owner mismatch{rows.length === 1 ? "" : "es"}</p>
+          <p className="text-[var(--muted)]">{rows.length} owner mismatch{rows.length === 1 ? "" : "es"}, {missingReftabRows.length} missing from Reftab</p>
         </div>
         <div className="w-full max-w-sm">
           <input
@@ -159,6 +237,19 @@ export default function OwnerReconciliationPage() {
 
       {error && <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">{error}</div>}
       {message && <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-emerald-800">{message}</div>}
+      {summary && rows.length === 0 && missingReftabRows.length === 0 && (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <SummaryPill label="Reftab items" value={summary.equipmentCount} />
+          <SummaryPill label="Ninja devices" value={summary.ninjaDeviceCount} />
+          <SummaryPill label="Device matches" value={summary.matchedDeviceCount} />
+          <SummaryPill label="Missing Reftab" value={summary.missingReftabCount} />
+          <SummaryPill label="No owner signal" value={summary.missingNinjaOwnerCount} />
+          <SummaryPill label="Owner not in Entra" value={summary.unresolvedNinjaOwnerCount} />
+          <SummaryPill label="Inactive owner" value={summary.inactiveNinjaOwnerCount} />
+          <SummaryPill label="Already aligned" value={summary.alreadyMatchedOwnerCount} />
+          <SummaryPill label="Mismatches" value={summary.mismatchCount} />
+        </div>
+      )}
 
       <section className="overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm">
         <div className="border-b border-[var(--border)] bg-[var(--table-header-bg)] px-4 py-3">
@@ -226,6 +317,77 @@ export default function OwnerReconciliationPage() {
           <p className="py-12 text-center text-[var(--muted)]">No owner mismatches found.</p>
         )}
       </section>
+
+      <section className="overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm">
+        <div className="border-b border-[var(--border)] bg-[var(--table-header-bg)] px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">In NinjaOne, missing from Reftab</h2>
+            <span className="text-sm text-[var(--muted)]">{filteredMissingRows.length} shown</span>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[980px]">
+            <thead>
+              <tr>
+                <th className="table-header">Asset</th>
+                <th className="table-header">Serial</th>
+                <th className="table-header">NinjaOne owner</th>
+                <th className="table-header">NinjaOne device</th>
+                <th className="table-header">Identity</th>
+                <th className="table-header">Last contact</th>
+                <th className="table-header">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredMissingRows.map((row) => (
+                <tr key={row.id} className="border-b border-[var(--border)] transition hover:bg-[var(--table-header-bg)]/50">
+                  <td className="table-cell">
+                    <div className="font-medium text-[var(--text)]">{row.assetTag}</div>
+                    <div className="text-xs text-[var(--muted)]">{row.title ?? row.model ?? "-"}</div>
+                  </td>
+                  <td className="table-cell text-[var(--text-secondary)]">{row.serial ?? "-"}</td>
+                  <td className="table-cell">
+                    <div className="font-medium text-[var(--text)]">{ownerLabel(row.ninjaOwner, row.ninjaOwner.employeeId)}</div>
+                    <div className="text-xs text-[var(--muted)]">{row.ninjaOwner.email}</div>
+                  </td>
+                  <td className="table-cell">
+                    <div className="font-medium text-[var(--text)]">{deviceLabel(row)}</div>
+                    <div className="text-xs text-[var(--muted)]">{row.ninjaOwnerRaw}</div>
+                  </td>
+                  <td className="table-cell">
+                    <span className="inline-flex items-center rounded-full bg-sky-50 px-2.5 py-0.5 text-xs font-medium text-sky-700">
+                      {row.identityReason}
+                    </span>
+                  </td>
+                  <td className="table-cell text-[var(--text-secondary)]">{formatDate(row.ninjaDevice.lastContact ?? row.ninjaDevice.lastUpdate)}</td>
+                  <td className="table-cell">
+                    <button
+                      type="button"
+                      onClick={() => addMissing(row)}
+                      disabled={approvingId === row.id}
+                      className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-50"
+                    >
+                      {approvingId === row.id ? "Adding" : "Add to Reftab"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {filteredMissingRows.length === 0 && (
+          <p className="py-12 text-center text-[var(--muted)]">No NinjaOne-only equipment found.</p>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function SummaryPill({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg border border-[var(--border)] bg-white px-4 py-3 shadow-sm">
+      <div className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">{label}</div>
+      <div className="mt-1 text-xl font-semibold text-[var(--text)]">{value.toLocaleString()}</div>
     </div>
   );
 }

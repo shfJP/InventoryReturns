@@ -22,6 +22,8 @@ const REF_TAB_TIMEOUT_MS = Math.max(Number(process.env.REF_TAB_REQUEST_TIMEOUT_M
 const REF_TAB_SYNC_SOURCE = (process.env.REF_TAB_SYNC_SOURCE ?? "loans").trim().toLowerCase();
 const REF_TAB_CHECKIN_ENDPOINT_TEMPLATE = (process.env.REF_TAB_CHECKIN_ENDPOINT_TEMPLATE ?? "loans/{loanId}/checkin").trim();
 const REF_TAB_CHECKOUT_ENDPOINT = (process.env.REF_TAB_CHECKOUT_ENDPOINT ?? "loans").trim();
+const REF_TAB_CREATE_ASSET_ENDPOINT = (process.env.REF_TAB_CREATE_ASSET_ENDPOINT ?? "assets").trim();
+const REF_TAB_CREATE_ASSET_CATEGORY_ID = (process.env.REF_TAB_CREATE_ASSET_CATEGORY_ID ?? "").trim();
 
 export type RefTabAssignment = {
   asset_tag: string;
@@ -804,6 +806,15 @@ export type ReftabOwnerReconciliationInput = {
   note?: string;
 };
 
+function createdAssetIdFromResponse(data: unknown): string | undefined {
+  if (data == null || typeof data !== "object") return undefined;
+  const record = data as Record<string, unknown>;
+  const asset = data != null && typeof record.asset === "object" && !Array.isArray(record.asset)
+    ? record.asset as Record<string, unknown>
+    : record;
+  return firstString(asset, ["aid", "id", "assetId", "asset_id", "asset.aid", "asset.id"]);
+}
+
 export async function reconcileReftabAssetOwner(input: ReftabOwnerReconciliationInput): Promise<{ loanId: string; loaneeId: string }> {
   const currentLoan = await findCurrentLoanForAsset({ assetTag: input.assetTag, aid: input.aid });
   if (!currentLoan) {
@@ -829,6 +840,44 @@ export async function reconcileReftabAssetOwner(input: ReftabOwnerReconciliation
   });
 
   return { loanId: currentLoan.loanId, loaneeId };
+}
+
+export type ReftabCreateAndAssignInput = {
+  assetTag: string;
+  serial?: string | null;
+  title?: string | null;
+  model?: string | null;
+  newOwnerEmployeeId: string;
+  newOwnerEmail: string;
+  note?: string;
+};
+
+export async function createAndAssignReftabAsset(input: ReftabCreateAndAssignInput): Promise<{ aid: string; loaneeId: string }> {
+  const newLoanee = await findLoaneeForUser({ employeeId: input.newOwnerEmployeeId, email: input.newOwnerEmail });
+  const loaneeId = valueToString(newLoanee?.lnid) ?? valueToString(newLoanee?.uid);
+  if (!loaneeId) {
+    throw new Error(`Could not find a Reftab loanee for ${input.newOwnerEmail || input.newOwnerEmployeeId}.`);
+  }
+
+  const note = input.note ?? `Created from NinjaOne reconciliation for ${input.assetTag}.`;
+  const createBody: Record<string, unknown> = {
+    id: input.assetTag,
+    title: input.title ?? input.model ?? input.serial ?? input.assetTag,
+    serial: input.serial ?? undefined,
+    notes: note,
+  };
+  if (input.model) createBody.model = input.model;
+  if (REF_TAB_CREATE_ASSET_CATEGORY_ID) createBody.cid = REF_TAB_CREATE_ASSET_CATEGORY_ID;
+
+  const created = await sendReftabJson(REF_TAB_CREATE_ASSET_ENDPOINT, "POST", `Reftab create asset ${input.assetTag}`, createBody);
+  const aid = createdAssetIdFromResponse(created) ?? input.assetTag;
+  await sendReftabJson(REF_TAB_CHECKOUT_ENDPOINT, "POST", `Reftab check-out asset ${input.assetTag}`, {
+    lnid: loaneeId,
+    aids: [aid],
+    notes: note,
+  });
+
+  return { aid, loaneeId };
 }
 
 /**

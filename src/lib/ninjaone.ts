@@ -70,6 +70,22 @@ function firstString(record: NinjaOneDeviceRecord, paths: string[]): string | un
 
 function findLikelyUser(record: NinjaOneDeviceRecord): string | undefined {
   const direct = firstString(record, [
+    "owner",
+    "ownerName",
+    "ownerUser",
+    "ownerUsername",
+    "ownerEmail",
+    "assignedTo",
+    "assignedUser",
+    "assignedUserName",
+    "assignedUsername",
+    "assignedUserEmail",
+    "assignedToUser",
+    "assignedToUserName",
+    "assignedToEmail",
+    "primaryUser",
+    "primaryUsername",
+    "primaryUserEmail",
     "lastLoggedInUser",
     "lastLoggedInUsername",
     "loggedInUser",
@@ -83,12 +99,25 @@ function findLikelyUser(record: NinjaOneDeviceRecord): string | undefined {
     "userData.lastLoggedInUsername",
     "userData.loggedInUser",
     "userData.loggedInUsername",
+    "userData.owner",
+    "userData.ownerEmail",
+    "userData.assignedTo",
+    "userData.assignedUser",
+    "userData.primaryUser",
     "fields.lastLoggedInUser",
     "fields.lastLoggedInUsername",
     "fields.loggedInUser",
     "fields.loggedInUsername",
+    "fields.owner",
+    "fields.ownerEmail",
+    "fields.assignedTo",
+    "fields.assignedUser",
+    "fields.primaryUser",
     "references.lastLoggedInUser",
     "references.loggedInUser",
+    "references.owner",
+    "references.assignedUser",
+    "references.primaryUser",
   ]);
   if (direct) return direct;
 
@@ -97,7 +126,12 @@ function findLikelyUser(record: NinjaOneDeviceRecord): string | undefined {
     if (section == null || typeof section !== "object") continue;
     for (const [key, value] of Object.entries(section as Record<string, unknown>)) {
       const normalizedKey = key.toLowerCase();
-      if (normalizedKey.includes("user") || normalizedKey.includes("login")) {
+      if (
+        normalizedKey.includes("user") ||
+        normalizedKey.includes("login") ||
+        normalizedKey.includes("owner") ||
+        normalizedKey.includes("assign")
+      ) {
         const text = valueToString(value);
         if (text) return text;
       }
