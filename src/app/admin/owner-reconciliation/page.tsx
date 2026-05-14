@@ -237,7 +237,7 @@ export default function OwnerReconciliationPage() {
 
       {error && <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">{error}</div>}
       {message && <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-emerald-800">{message}</div>}
-      {summary && rows.length === 0 && missingReftabRows.length === 0 && (
+      {summary && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <SummaryPill label="Reftab items" value={summary.equipmentCount} />
           <SummaryPill label="Ninja devices" value={summary.ninjaDeviceCount} />

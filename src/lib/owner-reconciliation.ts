@@ -19,6 +19,17 @@ type NinjaMatch = {
   matchReason: string;
 };
 
+type IndexedNinjaDevice = {
+  device: NinjaOneDevice;
+  identity: NinjaIdentity;
+  ownerRaw: string | null;
+};
+
+type NinjaDeviceIndex = {
+  devices: IndexedNinjaDevice[];
+  byIdentifier: Map<string, IndexedNinjaDevice[]>;
+};
+
 type NinjaIdentity = {
   assetTag: string;
   serial: string | null;
@@ -147,26 +158,77 @@ function deviceSearchText(device: NinjaOneDevice): string {
   ].map(normalizeText).join(" ");
 }
 
-function findBestNinjaMatch(item: EquipmentWithUser, devices: NinjaOneDevice[]): NinjaMatch | null {
+function addIdentifier(index: Map<string, IndexedNinjaDevice[]>, value: string | null | undefined, device: IndexedNinjaDevice): void {
+  const normalized = normalizeText(value);
+  if (normalized.length < 3) return;
+  const existing = index.get(normalized);
+  if (existing) {
+    existing.push(device);
+  } else {
+    index.set(normalized, [device]);
+  }
+}
+
+function buildNinjaDeviceIndex(devices: NinjaOneDevice[]): NinjaDeviceIndex {
+  const indexed = devices.map((device) => ({
+    device,
+    identity: ninjaIdentityFromDevice(device),
+    ownerRaw: likelyOwnerFromDevice(device),
+  }));
+  const byIdentifier = new Map<string, IndexedNinjaDevice[]>();
+  for (const item of indexed) {
+    addIdentifier(byIdentifier, item.device.id, item);
+    addIdentifier(byIdentifier, item.device.displayName, item);
+    addIdentifier(byIdentifier, item.device.systemName, item);
+    addIdentifier(byIdentifier, item.device.dnsName, item);
+    addIdentifier(byIdentifier, item.device.netbiosName, item);
+    addIdentifier(byIdentifier, item.identity.assetTag, item);
+    addIdentifier(byIdentifier, item.identity.serial, item);
+  }
+  return { devices: indexed, byIdentifier };
+}
+
+function findBestNinjaMatch(item: EquipmentWithUser, index: NinjaDeviceIndex): NinjaMatch | null {
   const candidates = [
     { label: "asset tag", value: item.assetTag, score: 100 },
+    { label: "asset id", value: item.aid, score: 95 },
     { label: "serial", value: item.serial, score: 90 },
-    { label: "model/title", value: item.model ?? item.title, score: 30 },
   ]
     .map((candidate) => ({ ...candidate, normalized: normalizeText(candidate.value) }))
     .filter((candidate) => candidate.normalized.length >= 3);
 
   if (candidates.length === 0) return null;
 
-  return devices
-    .map((device) => {
+  const matchesByDevice = new Map<string, NinjaMatch>();
+  for (const candidate of candidates) {
+    for (const indexedDevice of index.byIdentifier.get(candidate.normalized) ?? []) {
+      const existing = matchesByDevice.get(indexedDevice.device.id);
+      if (existing) {
+        existing.score += candidate.score;
+        existing.matchReason = `${existing.matchReason}, ${candidate.label}`;
+      } else {
+        matchesByDevice.set(indexedDevice.device.id, {
+          device: indexedDevice.device,
+          score: candidate.score,
+          matchReason: candidate.label,
+        });
+      }
+    }
+  }
+
+  if (matchesByDevice.size > 0) {
+    return Array.from(matchesByDevice.values()).sort((a, b) => b.score - a.score)[0] ?? null;
+  }
+
+  return index.devices
+    .map(({ device }) => {
       const haystack = deviceSearchText(device);
-      const matches = candidates.filter((candidate) => haystack.includes(candidate.normalized));
-      if (matches.length === 0) return null;
+      const fuzzyMatches = candidates.filter((candidate) => candidate.normalized.length >= 5 && haystack.includes(candidate.normalized));
+      if (fuzzyMatches.length === 0) return null;
       return {
         device,
-        score: matches.reduce((sum, match) => sum + match.score, 0),
-        matchReason: matches.map((match) => match.label).join(", "),
+        score: fuzzyMatches.reduce((sum, match) => sum + match.score, 0),
+        matchReason: fuzzyMatches.map((match) => match.label).join(", "),
       };
     })
     .filter((match): match is NinjaMatch => Boolean(match))
@@ -184,7 +246,18 @@ function equipmentSearchText(item: EquipmentWithUser): string {
   ].map(normalizeText).join(" ");
 }
 
-function hasReftabMatchForDevice(identity: NinjaIdentity, equipment: EquipmentWithUser[]): boolean {
+function buildEquipmentIdentifierSet(equipment: EquipmentWithUser[]): Set<string> {
+  const identifiers = new Set<string>();
+  for (const item of equipment) {
+    for (const value of [item.assetTag, item.aid, item.serial, item.title]) {
+      const normalized = normalizeText(value);
+      if (normalized.length >= 3) identifiers.add(normalized);
+    }
+  }
+  return identifiers;
+}
+
+function hasReftabMatchForDevice(identity: NinjaIdentity, equipmentIdentifiers: Set<string>, equipment: EquipmentWithUser[]): boolean {
   const candidates = [
     identity.assetTag,
     identity.serial,
@@ -194,9 +267,11 @@ function hasReftabMatchForDevice(identity: NinjaIdentity, equipment: EquipmentWi
     .filter((value) => value.length >= 3);
   if (candidates.length === 0) return false;
 
+  if (candidates.some((candidate) => equipmentIdentifiers.has(candidate))) return true;
+
   return equipment.some((item) => {
     const haystack = equipmentSearchText(item);
-    return candidates.some((candidate) => haystack.includes(candidate));
+    return candidates.some((candidate) => candidate.length >= 5 && haystack.includes(candidate));
   });
 }
 
@@ -433,6 +508,8 @@ export async function getOwnerReconciliationResult(): Promise<OwnerReconciliatio
     }),
   ]);
   const aliases = buildUserAliasMap(users.map(summarizeUser));
+  const ninjaIndex = buildNinjaDeviceIndex(devices);
+  const equipmentIdentifiers = buildEquipmentIdentifierSet(equipment);
   const summary: OwnerReconciliationSummary = {
     equipmentCount: equipment.length,
     ninjaDeviceCount: devices.length,
@@ -448,12 +525,12 @@ export async function getOwnerReconciliationResult(): Promise<OwnerReconciliatio
   const matchedDeviceIds = new Set<string>();
 
   for (const item of equipment) {
-    const match = findBestNinjaMatch(item, devices);
+    const match = findBestNinjaMatch(item, ninjaIndex);
     if (!match) continue;
     matchedDeviceIds.add(match.device.id);
     summary.matchedDeviceCount += 1;
 
-    const ninjaOwnerRaw = likelyOwnerFromDevice(match.device);
+    const ninjaOwnerRaw = ninjaIndex.devices.find((indexed) => indexed.device.id === match.device.id)?.ownerRaw;
     if (!ninjaOwnerRaw) {
       summary.missingNinjaOwnerCount += 1;
       continue;
@@ -476,12 +553,11 @@ export async function getOwnerReconciliationResult(): Promise<OwnerReconciliatio
   }
 
   const missingReftabRows: MissingReftabAssetRow[] = [];
-  for (const device of devices) {
+  for (const { device, identity, ownerRaw } of ninjaIndex.devices) {
     if (matchedDeviceIds.has(device.id)) continue;
-    const identity = ninjaIdentityFromDevice(device);
-    if (hasReftabMatchForDevice(identity, equipment)) continue;
+    if (hasReftabMatchForDevice(identity, equipmentIdentifiers, equipment)) continue;
 
-    const ninjaOwnerRaw = likelyOwnerFromDevice(device);
+    const ninjaOwnerRaw = ownerRaw;
     if (!ninjaOwnerRaw) continue;
     const ninjaOwner = resolveLikelyUser(ninjaOwnerRaw, aliases);
     if (!ninjaOwner?.isActive) continue;
