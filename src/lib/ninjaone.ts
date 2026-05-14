@@ -7,6 +7,8 @@ const NINJAONE_CLIENT_SECRET = (process.env.NINJAONE_CLIENT_SECRET ?? "").trim()
 const NINJAONE_SCOPE = (process.env.NINJAONE_SCOPE ?? "monitoring").trim();
 const NINJAONE_PAGE_SIZE = Math.min(Math.max(Number(process.env.NINJAONE_PAGE_SIZE) || 500, 1), 1000);
 const NINJAONE_TIMEOUT_MS = Math.max(Number(process.env.NINJAONE_REQUEST_TIMEOUT_MS) || 30_000, 5_000);
+const NINJAONE_ENRICH_DEVICE_DETAILS = (process.env.NINJAONE_ENRICH_DEVICE_DETAILS ?? "true").toLowerCase() !== "false";
+const NINJAONE_ENRICH_CONCURRENCY = Math.min(Math.max(Number(process.env.NINJAONE_ENRICH_CONCURRENCY) || 5, 1), 20);
 
 type NinjaOneTokenResponse = {
   access_token?: string;
@@ -47,6 +49,13 @@ function valueToString(value: unknown): string | undefined {
   if (value == null) return undefined;
   if (typeof value === "string") return value.trim() || undefined;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    for (const key of ["email", "mail", "userPrincipalName", "upn", "displayName", "name", "username", "userName", "id"]) {
+      const text = valueToString(record[key]);
+      if (text) return text;
+    }
+  }
   return undefined;
 }
 
@@ -118,10 +127,19 @@ function findLikelyUser(record: NinjaOneDeviceRecord): string | undefined {
     "references.owner",
     "references.assignedUser",
     "references.primaryUser",
+    "lastLoggedOnUser.userName",
+    "lastLoggedOnUser.username",
+    "lastLoggedOnUser.email",
+    "lastLoggedOnUser.userPrincipalName",
+    "customFields.owner",
+    "customFields.ownerEmail",
+    "customFields.assignedTo",
+    "customFields.assignedUser",
+    "customFields.primaryUser",
   ]);
   if (direct) return direct;
 
-  for (const sectionName of ["userData", "fields", "references"]) {
+  for (const sectionName of ["userData", "fields", "references", "customFields"]) {
     const section = record[sectionName];
     if (section == null || typeof section !== "object") continue;
     for (const [key, value] of Object.entries(section as Record<string, unknown>)) {
@@ -191,8 +209,27 @@ function listFromResponse(data: unknown): NinjaOneDeviceRecord[] {
   return [];
 }
 
-async function fetchAllNinjaOneDevices(): Promise<NinjaOneDeviceRecord[]> {
-  const token = await getNinjaOneAccessToken();
+async function fetchNinjaOneJson(token: string, path: string, label: string): Promise<unknown | null> {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const res = await fetchWithTimeout(
+    `${NINJAONE_BASE_URL}${normalizedPath}`,
+    {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+    },
+    NINJAONE_TIMEOUT_MS,
+    label
+  );
+  if (!res.ok) {
+    console.warn(`[ninjaone] ${label} returned ${res.status}: ${await res.text()}`);
+    return null;
+  }
+  return res.json().catch(() => null);
+}
+
+async function fetchAllNinjaOneDevices(token: string): Promise<NinjaOneDeviceRecord[]> {
   const out: NinjaOneDeviceRecord[] = [];
   let after: string | undefined;
 
@@ -230,6 +267,42 @@ async function fetchAllNinjaOneDevices(): Promise<NinjaOneDeviceRecord[]> {
   return out;
 }
 
+async function enrichDevice(token: string, device: NinjaOneDeviceRecord): Promise<NinjaOneDeviceRecord> {
+  const id = valueToString(device.id);
+  if (!id || !NINJAONE_ENRICH_DEVICE_DETAILS) return device;
+
+  const [details, customFields, lastLoggedOnUser] = await Promise.all([
+    fetchNinjaOneJson(token, `/api/v2/device/${encodeURIComponent(id)}`, `NinjaOne device ${id} details`).catch(() => null),
+    fetchNinjaOneJson(token, `/api/v2/device/${encodeURIComponent(id)}/custom-fields`, `NinjaOne device ${id} custom fields`).catch(() => null),
+    fetchNinjaOneJson(token, `/api/v2/device/${encodeURIComponent(id)}/last-logged-on-user`, `NinjaOne device ${id} last logged-on user`).catch(() => null),
+  ]);
+
+  return {
+    ...(details != null && typeof details === "object" && !Array.isArray(details) ? details as Record<string, unknown> : {}),
+    ...device,
+    customFields,
+    lastLoggedOnUser,
+  };
+}
+
+async function enrichDevices(token: string, devices: NinjaOneDeviceRecord[]): Promise<NinjaOneDeviceRecord[]> {
+  if (!NINJAONE_ENRICH_DEVICE_DETAILS || devices.length === 0) return devices;
+  const out: NinjaOneDeviceRecord[] = new Array(devices.length);
+  let next = 0;
+
+  async function worker(): Promise<void> {
+    while (true) {
+      const index = next;
+      next += 1;
+      if (index >= devices.length) return;
+      out[index] = await enrichDevice(token, devices[index]);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(NINJAONE_ENRICH_CONCURRENCY, devices.length) }, () => worker()));
+  return out;
+}
+
 function normalizeDevice(record: NinjaOneDeviceRecord): NormalizedNinjaOneDevice | null {
   const id = valueToString(record.id);
   if (!id) return null;
@@ -252,9 +325,11 @@ function normalizeDevice(record: NinjaOneDeviceRecord): NormalizedNinjaOneDevice
 }
 
 export async function syncNinjaOneToDb(): Promise<NinjaOneSyncResult> {
-  const fetchedDevices = await fetchAllNinjaOneDevices();
+  const token = await getNinjaOneAccessToken();
+  const fetchedDevices = await fetchAllNinjaOneDevices(token);
+  const enrichedDevices = await enrichDevices(token, fetchedDevices);
   const now = new Date();
-  const normalized = fetchedDevices.map(normalizeDevice).filter((device): device is NormalizedNinjaOneDevice => Boolean(device));
+  const normalized = enrichedDevices.map(normalizeDevice).filter((device): device is NormalizedNinjaOneDevice => Boolean(device));
   const syncedIds = new Set(normalized.map((device) => device.id));
 
   let upserted = 0;

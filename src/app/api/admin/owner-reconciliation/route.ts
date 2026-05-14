@@ -38,6 +38,9 @@ export async function POST(req: NextRequest) {
     if (!row || row.assetTag !== parsed.data.assetTag) {
       return NextResponse.json({ error: "No current NinjaOne device missing from Reftab was found for this request." }, { status: 404 });
     }
+    if (!row.ninjaOwner?.isActive) {
+      return NextResponse.json({ error: "This NinjaOne device does not resolve to an active Entra owner yet." }, { status: 400 });
+    }
 
     try {
       const result = await createAndAssignReftabAsset({

@@ -71,8 +71,9 @@ export type MissingReftabAssetRow = {
   serial: string | null;
   model: string | null;
   title: string | null;
-  ninjaOwner: UserSummary;
-  ninjaOwnerRaw: string;
+  ninjaOwner: UserSummary | null;
+  ninjaOwnerRaw: string | null;
+  ownerStatus: "active" | "missing" | "unresolved" | "inactive";
   ninjaDevice: NinjaDeviceView;
   identityReason: string;
 };
@@ -190,9 +191,10 @@ function buildNinjaDeviceIndex(devices: NinjaOneDevice[]): NinjaDeviceIndex {
 
 function findBestNinjaMatch(item: EquipmentWithUser, index: NinjaDeviceIndex): NinjaMatch | null {
   const candidates = [
-    { label: "asset tag", value: item.assetTag, score: 100 },
-    { label: "asset id", value: item.aid, score: 95 },
-    { label: "serial", value: item.serial, score: 90 },
+    { label: "asset tag", value: item.assetTag, score: 100, allowFuzzy: true },
+    { label: "asset id", value: item.aid, score: 95, allowFuzzy: true },
+    { label: "serial", value: item.serial, score: 90, allowFuzzy: true },
+    { label: "asset title", value: item.title, score: 85, allowFuzzy: false },
   ]
     .map((candidate) => ({ ...candidate, normalized: normalizeText(candidate.value) }))
     .filter((candidate) => candidate.normalized.length >= 3);
@@ -223,7 +225,7 @@ function findBestNinjaMatch(item: EquipmentWithUser, index: NinjaDeviceIndex): N
   return index.devices
     .map(({ device }) => {
       const haystack = deviceSearchText(device);
-      const fuzzyMatches = candidates.filter((candidate) => candidate.normalized.length >= 5 && haystack.includes(candidate.normalized));
+      const fuzzyMatches = candidates.filter((candidate) => candidate.allowFuzzy && candidate.normalized.length >= 5 && haystack.includes(candidate.normalized));
       if (fuzzyMatches.length === 0) return null;
       return {
         device,
@@ -358,6 +360,11 @@ function likelyOwnerFromDevice(device: NinjaOneDevice): string | null {
     "fields.assignedUser",
     "fields.primaryUser",
     "fields.lastLoggedInUser",
+    "customFields.owner",
+    "customFields.ownerEmail",
+    "customFields.assignedTo",
+    "customFields.assignedUser",
+    "customFields.primaryUser",
     "references.owner",
     "references.assignedUser",
     "references.primaryUser",
@@ -365,7 +372,7 @@ function likelyOwnerFromDevice(device: NinjaOneDevice): string | null {
   ]);
   if (direct) return direct;
 
-  for (const sectionName of ["userData", "fields", "references"]) {
+  for (const sectionName of ["userData", "fields", "references", "customFields"]) {
     const section = details[sectionName];
     if (section == null || typeof section !== "object") continue;
     for (const [key, value] of Object.entries(section as Record<string, unknown>)) {
@@ -402,6 +409,10 @@ function deviceView(device: NinjaOneDevice): NinjaDeviceView {
 function ninjaIdentityFromDevice(device: NinjaOneDevice): NinjaIdentity {
   const details = parseDetailsJson(device);
   const serial = firstString(details, [
+    "itamAssetSerialNumber",
+    "assetSerialNumber",
+    "customFields.itamAssetSerialNumber",
+    "customFields.assetSerialNumber",
     "serial",
     "serialNumber",
     "serial_number",
@@ -410,6 +421,16 @@ function ninjaIdentityFromDevice(device: NinjaOneDevice): NinjaIdentity {
     "hardware.serialNumber",
     "fields.serial",
     "fields.serialNumber",
+  ]);
+  const assetId = firstString(details, [
+    "itamAssetId",
+    "itamAssetID",
+    "assetId",
+    "assetID",
+    "customFields.itamAssetId",
+    "customFields.itamAssetID",
+    "customFields.assetId",
+    "customFields.assetID",
   ]);
   const model = firstString(details, [
     "model",
@@ -420,7 +441,7 @@ function ninjaIdentityFromDevice(device: NinjaOneDevice): NinjaIdentity {
   ]);
   const title = device.displayName ?? device.systemName ?? device.dnsName ?? device.netbiosName ?? model ?? serial ?? device.id;
   return {
-    assetTag: serial ?? device.systemName ?? device.displayName ?? device.id,
+    assetTag: assetId ?? serial ?? device.systemName ?? device.displayName ?? device.id,
     serial: serial ?? null,
     model: model ?? null,
     title,
@@ -462,7 +483,13 @@ function toRow(item: EquipmentWithUser, match: NinjaMatch, ninjaOwner: UserSumma
   };
 }
 
-function toMissingRow(device: NinjaOneDevice, identity: NinjaIdentity, ninjaOwner: UserSummary, ninjaOwnerRaw: string): MissingReftabAssetRow {
+function missingOwnerStatus(ownerRaw: string | null, ninjaOwner: UserSummary | null): MissingReftabAssetRow["ownerStatus"] {
+  if (!ownerRaw) return "missing";
+  if (!ninjaOwner) return "unresolved";
+  return ninjaOwner.isActive ? "active" : "inactive";
+}
+
+function toMissingRow(device: NinjaOneDevice, identity: NinjaIdentity, ninjaOwner: UserSummary | null, ninjaOwnerRaw: string | null): MissingReftabAssetRow {
   return {
     id: device.id,
     assetTag: identity.assetTag,
@@ -471,6 +498,7 @@ function toMissingRow(device: NinjaOneDevice, identity: NinjaIdentity, ninjaOwne
     title: identity.title,
     ninjaOwner,
     ninjaOwnerRaw,
+    ownerStatus: missingOwnerStatus(ninjaOwnerRaw, ninjaOwner),
     ninjaDevice: deviceView(device),
     identityReason: identityReason(identity),
   };
@@ -558,9 +586,14 @@ export async function getOwnerReconciliationResult(): Promise<OwnerReconciliatio
     if (hasReftabMatchForDevice(identity, equipmentIdentifiers, equipment)) continue;
 
     const ninjaOwnerRaw = ownerRaw;
-    if (!ninjaOwnerRaw) continue;
-    const ninjaOwner = resolveLikelyUser(ninjaOwnerRaw, aliases);
-    if (!ninjaOwner?.isActive) continue;
+    const ninjaOwner = ninjaOwnerRaw ? resolveLikelyUser(ninjaOwnerRaw, aliases) : null;
+    if (!ninjaOwnerRaw) {
+      summary.missingNinjaOwnerCount += 1;
+    } else if (!ninjaOwner) {
+      summary.unresolvedNinjaOwnerCount += 1;
+    } else if (!ninjaOwner.isActive) {
+      summary.inactiveNinjaOwnerCount += 1;
+    }
     missingReftabRows.push(toMissingRow(device, identity, ninjaOwner, ninjaOwnerRaw));
   }
 

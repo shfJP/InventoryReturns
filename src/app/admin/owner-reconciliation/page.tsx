@@ -45,8 +45,9 @@ type MissingReftabAssetRow = {
   serial: string | null;
   model: string | null;
   title: string | null;
-  ninjaOwner: UserSummary;
-  ninjaOwnerRaw: string;
+  ninjaOwner: UserSummary | null;
+  ninjaOwnerRaw: string | null;
+  ownerStatus: "active" | "missing" | "unresolved" | "inactive";
   ninjaDevice: OwnerReconciliationRow["ninjaDevice"];
   identityReason: string;
 };
@@ -82,6 +83,15 @@ function formatDate(value: string | null) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
+}
+
+function ownerStatusLabel(status: MissingReftabAssetRow["ownerStatus"]) {
+  return {
+    active: "Active Entra owner",
+    missing: "No owner signal",
+    unresolved: "Owner not in Entra",
+    inactive: "Inactive owner",
+  }[status];
 }
 
 export default function OwnerReconciliationPage() {
@@ -148,9 +158,9 @@ export default function OwnerReconciliationPage() {
         row.serial,
         row.model,
         row.title,
-        row.ninjaOwner.displayName,
-        row.ninjaOwner.email,
-        row.ninjaOwner.employeeId,
+        row.ninjaOwner?.displayName,
+        row.ninjaOwner?.email,
+        row.ninjaOwner?.employeeId,
         row.ninjaOwnerRaw,
         deviceLabel(row),
       ]
@@ -186,6 +196,7 @@ export default function OwnerReconciliationPage() {
   }
 
   async function addMissing(row: MissingReftabAssetRow) {
+    if (!row.ninjaOwner?.isActive) return;
     const confirmed = window.confirm(`Add ${row.assetTag} to Reftab and assign it to ${ownerLabel(row.ninjaOwner, row.ninjaOwner.employeeId)}?`);
     if (!confirmed) return;
 
@@ -347,8 +358,8 @@ export default function OwnerReconciliationPage() {
                   </td>
                   <td className="table-cell text-[var(--text-secondary)]">{row.serial ?? "-"}</td>
                   <td className="table-cell">
-                    <div className="font-medium text-[var(--text)]">{ownerLabel(row.ninjaOwner, row.ninjaOwner.employeeId)}</div>
-                    <div className="text-xs text-[var(--muted)]">{row.ninjaOwner.email}</div>
+                    <div className="font-medium text-[var(--text)]">{row.ninjaOwner ? ownerLabel(row.ninjaOwner, row.ninjaOwner.employeeId) : ownerStatusLabel(row.ownerStatus)}</div>
+                    <div className="text-xs text-[var(--muted)]">{row.ninjaOwner?.email ?? row.ninjaOwnerRaw ?? "-"}</div>
                   </td>
                   <td className="table-cell">
                     <div className="font-medium text-[var(--text)]">{deviceLabel(row)}</div>
@@ -364,8 +375,9 @@ export default function OwnerReconciliationPage() {
                     <button
                       type="button"
                       onClick={() => addMissing(row)}
-                      disabled={approvingId === row.id}
+                      disabled={approvingId === row.id || !row.ninjaOwner?.isActive}
                       className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-50"
+                      title={row.ninjaOwner?.isActive ? "Create and assign in Reftab" : ownerStatusLabel(row.ownerStatus)}
                     >
                       {approvingId === row.id ? "Adding" : "Add to Reftab"}
                     </button>
