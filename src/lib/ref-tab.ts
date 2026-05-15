@@ -39,6 +39,12 @@ const REF_TAB_USAGE_LOANS_ENDPOINTS = (process.env.REF_TAB_USAGE_LOANS_ENDPOINTS
   .split(",")
   .map((endpoint) => endpoint.trim())
   .filter(Boolean);
+const REF_TAB_USAGE_EXCLUDED_ACTORS = new Set(
+  (process.env.REF_TAB_USAGE_EXCLUDED_ACTORS ?? "mhastie@sevenhills.org")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)
+);
 
 export type RefTabAssignment = {
   asset_tag: string;
@@ -1356,6 +1362,13 @@ const CHECKED_OUT_BY_ID_PATHS = [
 
 type ReftabUsageActor = { displayName: string; email: string; key: string; sourceField: string };
 
+function isExcludedUsageActor(actor: ReftabUsageActor | null): boolean {
+  if (!actor) return true;
+  return [actor.email, actor.key, actor.displayName]
+    .map((value) => value.trim().toLowerCase())
+    .some((value) => value && REF_TAB_USAGE_EXCLUDED_ACTORS.has(value));
+}
+
 function actorFromLoan(
   loan: Record<string, unknown>,
   objectPaths: string[],
@@ -2224,6 +2237,7 @@ export async function fetchReftabCheckInUsage(): Promise<ReftabCheckInUsageResul
       const checkOutIdentity = loanUsageIdentity(loan, checkedOutBy?.key ?? "__unknown_reftab_checkout_user");
       if (checkOutIdentity && !seenCheckOutLoans.has(checkOutIdentity)) {
         seenCheckOutLoans.add(checkOutIdentity);
+        if (isExcludedUsageActor(checkedOutBy)) continue;
         const itemCount = loanItemCount(loan);
         checkedOutLoans++;
         totalCheckedOut += itemCount;
@@ -2249,6 +2263,7 @@ export async function fetchReftabCheckInUsage(): Promise<ReftabCheckInUsageResul
       const identity = loanUsageIdentity(loan, returnedBy?.key ?? "__unknown_reftab_return_user");
       if (identity && seenCheckInLoans.has(identity)) continue;
       if (identity) seenCheckInLoans.add(identity);
+      if (isExcludedUsageActor(returnedBy)) continue;
 
       const itemCount = loanItemCount(loan);
       checkedInLoans++;
