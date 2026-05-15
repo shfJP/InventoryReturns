@@ -35,6 +35,10 @@ const REF_TAB_CREATE_ASSET_LAPTOP_CATEGORY_ID = (process.env.REF_TAB_CREATE_ASSE
 const REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID = (process.env.REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID ?? "").trim();
 const REF_TAB_CREATE_ASSET_LOCATION_ID = (process.env.REF_TAB_CREATE_ASSET_LOCATION_ID ?? "67497").trim();
 const REF_TAB_CREATE_ASSET_SERVICE_TAG_FIELD = (process.env.REF_TAB_CREATE_ASSET_SERVICE_TAG_FIELD ?? "Service Tag").trim();
+const REF_TAB_USAGE_LOANS_ENDPOINTS = (process.env.REF_TAB_USAGE_LOANS_ENDPOINTS ?? "loans?status=in,loans?status=returned,loans")
+  .split(",")
+  .map((endpoint) => endpoint.trim())
+  .filter(Boolean);
 
 export type RefTabAssignment = {
   asset_tag: string;
@@ -91,6 +95,29 @@ type UserAlias = {
   managerEmployeeId: string | null;
   managerName: string | null;
   managerEmail: string | null;
+};
+
+export type ReftabCheckInUsageRow = {
+  staffKey: string;
+  displayName: string;
+  email: string;
+  checkedInCount: number;
+  percentOfTotal: number;
+};
+
+export type ReftabCheckInUsageResult = {
+  rows: ReftabCheckInUsageRow[];
+  totals: {
+    staffCount: number;
+    totalCheckedIn: number;
+    unknownStaffCheckInCount: number;
+  };
+  source: {
+    endpoints: string[];
+    fetchedLoans: number;
+    checkedInLoans: number;
+    missingReturnedByCount: number;
+  };
 };
 
 /** Sign a Reftab API request (same rules as official ReftabNode). */
@@ -474,6 +501,49 @@ function listFromResponse(data: unknown): Record<string, unknown>[] {
     }
   }
   return [];
+}
+
+function normalizeFieldName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function firstDeepStringByKey(record: Record<string, unknown>, keys: string[]): string | undefined {
+  const keySet = new Set(keys.map(normalizeFieldName));
+  for (const candidate of collectRecords(record)) {
+    for (const [key, value] of Object.entries(candidate)) {
+      if (!keySet.has(normalizeFieldName(key))) continue;
+      const text = valueToString(value);
+      if (text) return text;
+    }
+  }
+  return undefined;
+}
+
+function firstLooseObject(record: Record<string, unknown>, paths: string[]): Record<string, unknown> | undefined {
+  for (const path of paths) {
+    const value = getNestedLoose(record, path);
+    if (value != null && typeof value === "object" && !Array.isArray(value)) {
+      return value as Record<string, unknown>;
+    }
+  }
+  const keySet = new Set(paths.map((path) => normalizeFieldName(path.split(".").at(-1) ?? path)));
+  for (const candidate of collectRecords(record)) {
+    for (const [key, value] of Object.entries(candidate)) {
+      if (!keySet.has(normalizeFieldName(key))) continue;
+      if (value != null && typeof value === "object" && !Array.isArray(value)) {
+        return value as Record<string, unknown>;
+      }
+    }
+  }
+  return undefined;
+}
+
+function paginatedEndpoint(endpoint: string, limit: number, offset: number): string {
+  const [path, query = ""] = endpoint.split("?", 2);
+  const params = new URLSearchParams(query);
+  params.set("limit", String(limit));
+  params.set("offset", String(offset));
+  return `${path}?${params.toString()}`;
 }
 
 async function fetchReftabJson(endpoint: string, label: string): Promise<unknown> {
@@ -900,6 +970,157 @@ function assignmentsFromLoan(loan: Record<string, unknown>, assignee: string, ma
 
 function loanIdFromRecord(loan: Record<string, unknown>): string | undefined {
   return firstString(loan, ["loanId", "loan_id", "lid", "id", "loan.id", "loan.lid", "_id"]);
+}
+
+function returnedAtFromLoan(loan: Record<string, unknown>): string | undefined {
+  return firstStringLoose(loan, [
+    "returnedAt",
+    "returned_at",
+    "returnDate",
+    "return_date",
+    "checkedInAt",
+    "checked_in_at",
+    "dateReturned",
+    "date_returned",
+    "loan.returnedAt",
+    "loan.returnDate",
+    "loan.checkedInAt",
+  ]) ?? firstDeepStringByKey(loan, [
+    "Returned At",
+    "Returned Date",
+    "Return Date",
+    "Checked In At",
+    "Checked In Date",
+    "Date Returned",
+  ]);
+}
+
+function isHistoricalCheckInLoan(loan: Record<string, unknown>): boolean {
+  if (returnedAtFromLoan(loan)) return true;
+  const status = normalizedStatusText(firstStatus(loan, ["status", "loan.status", "statusName", "loan.statusName"]));
+  return isInactiveLoanStatus(status) || status === "in";
+}
+
+function returnedByFromLoan(loan: Record<string, unknown>): { displayName: string; email: string; key: string } | null {
+  const userObject = firstLooseObject(loan, [
+    "returnedBy",
+    "returned_by",
+    "checkedInBy",
+    "checked_in_by",
+    "checkedInUser",
+    "checked_in_user",
+    "returnUser",
+    "returnedByUser",
+    "returned_by_user",
+    "loan.returnedBy",
+    "loan.checkedInBy",
+    "loan.checkinUser",
+  ]);
+  const objectEmail = userObject
+    ? firstStringLoose(userObject, ["email", "mail", "emailAddress", "email_address", "upn", "userPrincipalName"])
+    : undefined;
+  const objectName = userObject
+    ? firstStringLoose(userObject, ["name", "displayName", "display_name", "fullName", "full_name", "title"])
+    : undefined;
+  const objectId = userObject
+    ? firstStringLoose(userObject, ["uid", "id", "userId", "user_id", "employeeId", "employee_id"])
+    : undefined;
+
+  const email = objectEmail ?? firstStringLoose(loan, [
+    "returnedBy.email",
+    "returnedBy.mail",
+    "returned_by.email",
+    "checkedInBy.email",
+    "checked_in_by.email",
+    "checkedInUser.email",
+    "returnUser.email",
+    "returnedByEmail",
+    "returned_by_email",
+    "checkedInByEmail",
+    "checked_in_by_email",
+    "checkedInUserEmail",
+    "returnedUserEmail",
+    "returned_by_user_email",
+    "returnUserEmail",
+    "loan.returnedBy.email",
+    "loan.checkedInBy.email",
+  ]) ?? firstDeepStringByKey(loan, [
+    "Returned By Email",
+    "Checked In By Email",
+    "Checked-In By Email",
+    "Return User Email",
+  ]);
+
+  const nameOrEmail = objectName ?? firstStringLoose(loan, [
+    "returnedByName",
+    "returned_by_name",
+    "checkedInByName",
+    "checked_in_by_name",
+    "checkedInUserName",
+    "returnedUserName",
+    "returned_by_user_name",
+    "returnUserName",
+    "returnedBy",
+    "returned_by",
+    "checkedInBy",
+    "checked_in_by",
+    "loan.returnedByName",
+    "loan.checkedInByName",
+  ]) ?? firstDeepStringByKey(loan, [
+    "Returned By",
+    "Checked In By",
+    "Checked-In By",
+    "Return User",
+    "Returned User",
+  ]);
+
+  const id = objectId ?? firstStringLoose(loan, [
+    "returnedById",
+    "returned_by_id",
+    "checkedInById",
+    "checked_in_by_id",
+    "returnedUserId",
+    "returnUserId",
+    "loan.returnedById",
+    "loan.checkedInById",
+  ]) ?? firstDeepStringByKey(loan, [
+    "Returned By Id",
+    "Checked In By Id",
+    "Checked-In By Id",
+  ]);
+
+  const displayName = nameOrEmail && nameOrEmail.includes("@") && !email ? "" : nameOrEmail ?? "";
+  const resolvedEmail = email ?? (nameOrEmail?.includes("@") ? nameOrEmail : "");
+  const key = normalizeKey(resolvedEmail) ?? normalizeKey(id) ?? normalizeKey(displayName);
+  if (!key) return null;
+
+  return {
+    key,
+    displayName: displayName || resolvedEmail || id || "Unknown Reftab user",
+    email: resolvedEmail,
+  };
+}
+
+function loanItemCount(loan: Record<string, unknown>): number {
+  const counts = ["assets", "items", "assetItems", "asset_items"].map((key) => {
+    const value = getNestedLoose(loan, key);
+    return Array.isArray(value) ? value.length : 0;
+  });
+  const count = Math.max(...counts);
+  return count > 0 ? count : 1;
+}
+
+function loanUsageIdentity(loan: Record<string, unknown>, returnedByKey: string): string {
+  const id = loanIdFromRecord(loan);
+  if (id) return id;
+  const details = assetDetails(loan);
+  return [
+    details.assetTag,
+    details.serial,
+    returnedAtFromLoan(loan),
+    returnedByKey,
+    getLoanAssignee(loan, { lnidToEmail: new Map(), uidToEmail: new Map(), lnidToLoanee: new Map(), uidToLoanee: new Map() }),
+  ].filter(Boolean).join("|");
 }
 
 function sameReftabAsset(asset: RefTabAssignment, target: { assetTag: string; aid?: string | null }): boolean {
@@ -1545,6 +1766,100 @@ async function fetchAllReftabLoans(): Promise<RefTabAssignment[]> {
 
   console.info(`[reftab] Fetched ${allLoans.length} loan(s); mapped ${out.length} checked-out asset assignment(s); skippedInactive=${skippedInactive}; skippedMissingAssignee=${skippedMissingAssignee}; skippedMissingAsset=${skippedMissingAsset}.`);
   return out;
+}
+
+async function fetchReftabLoanUsageRecords(endpoint: string): Promise<Record<string, unknown>[]> {
+  const limit = ASSETS_LIMIT;
+  let offset = 0;
+  const out: Record<string, unknown>[] = [];
+
+  while (offset < 500_000) {
+    const query = paginatedEndpoint(endpoint, limit, offset);
+    let list: Record<string, unknown>[];
+    try {
+      list = listFromResponse(await fetchReftabJson(query, `Reftab check-in usage ${endpoint} offset ${offset}`));
+    } catch (e) {
+      console.warn(`[reftab] Check-in usage request failed for endpoint="${endpoint}" offset=${offset}: ${e instanceof Error ? e.message : String(e)}`);
+      break;
+    }
+    console.info(`[reftab] Check-in usage endpoint="${endpoint}" offset=${offset} returned ${list.length} loan(s).`);
+    if (list.length === 0) break;
+    out.push(...list);
+    if (list.length < limit) break;
+    offset += limit;
+  }
+
+  return out;
+}
+
+export async function fetchReftabCheckInUsage(): Promise<ReftabCheckInUsageResult> {
+  if (!REF_TAB_PUBLIC || !REF_TAB_SECRET) {
+    console.warn("[reftab] Check-in usage skipped: REF_TAB_API_PUBLIC_KEY or REF_TAB_API_SECRET_KEY is not configured.");
+    return {
+      rows: [],
+      totals: { staffCount: 0, totalCheckedIn: 0, unknownStaffCheckInCount: 0 },
+      source: { endpoints: REF_TAB_USAGE_LOANS_ENDPOINTS, fetchedLoans: 0, checkedInLoans: 0, missingReturnedByCount: 0 },
+    };
+  }
+
+  const byStaff = new Map<string, ReftabCheckInUsageRow>();
+  const seenLoans = new Set<string>();
+  let fetchedLoans = 0;
+  let checkedInLoans = 0;
+  let totalCheckedIn = 0;
+  let missingReturnedByCount = 0;
+
+  for (const endpoint of REF_TAB_USAGE_LOANS_ENDPOINTS) {
+    const loans = await fetchReftabLoanUsageRecords(endpoint);
+    fetchedLoans += loans.length;
+
+    for (const loan of loans) {
+      if (!isHistoricalCheckInLoan(loan)) continue;
+
+      const returnedBy = returnedByFromLoan(loan);
+      const staffKey = returnedBy?.key ?? "__unknown_reftab_user";
+      const identity = loanUsageIdentity(loan, staffKey);
+      if (identity && seenLoans.has(identity)) continue;
+      if (identity) seenLoans.add(identity);
+
+      const itemCount = loanItemCount(loan);
+      checkedInLoans++;
+      totalCheckedIn += itemCount;
+      if (!returnedBy) missingReturnedByCount += itemCount;
+
+      const row = byStaff.get(staffKey) ?? {
+        staffKey,
+        displayName: returnedBy?.displayName ?? "Unknown Reftab user",
+        email: returnedBy?.email ?? "",
+        checkedInCount: 0,
+        percentOfTotal: 0,
+      };
+      row.checkedInCount += itemCount;
+      byStaff.set(staffKey, row);
+    }
+  }
+
+  const rows = Array.from(byStaff.values())
+    .map((row) => ({
+      ...row,
+      percentOfTotal: totalCheckedIn > 0 ? Number(((row.checkedInCount / totalCheckedIn) * 100).toFixed(1)) : 0,
+    }))
+    .sort((a, b) => b.checkedInCount - a.checkedInCount || a.displayName.localeCompare(b.displayName));
+
+  return {
+    rows,
+    totals: {
+      staffCount: rows.filter((row) => row.staffKey !== "__unknown_reftab_user").length,
+      totalCheckedIn,
+      unknownStaffCheckInCount: missingReturnedByCount,
+    },
+    source: {
+      endpoints: REF_TAB_USAGE_LOANS_ENDPOINTS,
+      fetchedLoans,
+      checkedInLoans,
+      missingReturnedByCount,
+    },
+  };
 }
 
 /** Fetch ALL assets from Reftab (no employee filter) with full pagination. */

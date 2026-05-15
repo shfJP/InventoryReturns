@@ -8,13 +8,10 @@ import { exportRowsToCsv } from "@/lib/csv-export";
 import { formatPersonName } from "@/lib/display-name";
 
 type StaffUsageRow = {
-  userId: string;
-  employeeId: string;
+  staffKey: string;
   displayName: string;
   email: string;
   checkedInCount: number;
-  managerCheckInCount: number;
-  itCheckInCount: number;
   percentOfTotal: number;
 };
 
@@ -23,8 +20,13 @@ type UsageResponse = {
   totals: {
     staffCount: number;
     totalCheckedIn: number;
-    managerCheckInCount: number;
-    itCheckInCount: number;
+    unknownStaffCheckInCount: number;
+  };
+  source: {
+    endpoints: string[];
+    fetchedLoans: number;
+    checkedInLoans: number;
+    missingReturnedByCount: number;
   };
 };
 
@@ -55,19 +57,16 @@ export default function ReftabUsagePage() {
     const normalized = query.trim().toLowerCase();
     if (!data || !normalized) return data?.rows ?? [];
     return data.rows.filter((row) =>
-      [row.displayName, row.email, row.employeeId].some((value) => value.toLowerCase().includes(normalized))
+      [row.displayName, row.email].some((value) => value.toLowerCase().includes(normalized))
     );
   }, [data, query]);
 
   function exportReport() {
     exportRowsToCsv("reftab-check-ins-by-staff.csv", [
       { header: "Staff", value: (row) => formatPersonName(row.displayName) },
-      { header: "Employee ID", value: (row) => row.employeeId },
       { header: "Email", value: (row) => row.email },
       { header: "Checked-In Items", value: (row) => row.checkedInCount },
       { header: "Percent of Total", value: (row) => `${row.percentOfTotal}%` },
-      { header: "Manager Role Check-Ins", value: (row) => row.managerCheckInCount },
-      { header: "IT Role Check-Ins", value: (row) => row.itCheckInCount },
     ], filteredRows);
   }
 
@@ -83,7 +82,7 @@ export default function ReftabUsagePage() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-[var(--text)]">Reftab Usage</h1>
-          <p className="text-[var(--muted)]">Checked-in equipment by staff member as a percentage of all checked-in items.</p>
+          <p className="text-[var(--muted)]">Reftab returned equipment by the staff user who checked the item in.</p>
         </div>
         <div className="flex w-full max-w-xl flex-wrap gap-2 sm:flex-nowrap">
           <input
@@ -106,10 +105,10 @@ export default function ReftabUsagePage() {
       {data && (
         <>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <SummaryPill label="Checked-In Items" value={data.totals.totalCheckedIn} />
-            <SummaryPill label="Staff Using Workflow" value={data.totals.staffCount} />
-            <SummaryPill label="Manager Role Check-Ins" value={data.totals.managerCheckInCount} />
-            <SummaryPill label="IT Role Check-Ins" value={data.totals.itCheckInCount} />
+            <SummaryPill label="Reftab Checked-In Items" value={data.totals.totalCheckedIn} />
+            <SummaryPill label="Staff Who Checked In" value={data.totals.staffCount} />
+            <SummaryPill label="Returned Loan Rows" value={data.source.checkedInLoans} />
+            <SummaryPill label="Unknown Staff Items" value={data.totals.unknownStaffCheckInCount} />
           </div>
 
           <section className="overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm">
@@ -126,16 +125,14 @@ export default function ReftabUsagePage() {
                     <th className="table-header">Staff</th>
                     <th className="table-header">Checked-In Items</th>
                     <th className="table-header">Percent of Total</th>
-                    <th className="table-header">Manager Role</th>
-                    <th className="table-header">IT Role</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredRows.map((row) => (
-                    <tr key={row.userId} className="border-b border-[var(--border)] transition hover:bg-[var(--table-header-bg)]/50">
+                    <tr key={row.staffKey} className="border-b border-[var(--border)] transition hover:bg-[var(--table-header-bg)]/50">
                       <td className="table-cell">
                         <div className="font-medium text-[var(--text)]">{formatPersonName(row.displayName)}</div>
-                        <div className="text-xs text-[var(--muted)]">{row.email}</div>
+                        <div className="text-xs text-[var(--muted)]">{row.email || "No returned-by email in Reftab"}</div>
                       </td>
                       <td className="table-cell text-[var(--text)]">{row.checkedInCount}</td>
                       <td className="table-cell">
@@ -146,8 +143,6 @@ export default function ReftabUsagePage() {
                           <span className="font-semibold text-[var(--text)]">{row.percentOfTotal}%</span>
                         </div>
                       </td>
-                      <td className="table-cell text-emerald-700">{row.managerCheckInCount}</td>
-                      <td className="table-cell text-blue-700">{row.itCheckInCount}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -157,6 +152,9 @@ export default function ReftabUsagePage() {
               <p className="py-12 text-center text-[var(--muted)]">No checked-in item data found.</p>
             )}
           </section>
+          <p className="text-xs text-[var(--muted)]">
+            Source: Reftab loan history from {data.source.endpoints.join(", ")}. Fetched {data.source.fetchedLoans.toLocaleString()} loan row(s).
+          </p>
         </>
       )}
     </div>
