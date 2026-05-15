@@ -74,6 +74,8 @@ type ApiResponse = {
   };
 };
 
+const MISMATCH_PAGE_SIZE = 25;
+
 function ownerLabel(owner: UserSummary | null, fallbackEmployeeId: string) {
   if (!owner) return fallbackEmployeeId;
   return `${owner.displayName} (${owner.employeeId})`;
@@ -164,6 +166,7 @@ export default function OwnerReconciliationPage() {
   const [categories, setCategories] = useState<CategoryOption[]>([]);
   const [categoryLoading, setCategoryLoading] = useState(false);
   const [selectedCategoryId, setSelectedCategoryId] = useState("");
+  const [mismatchPage, setMismatchPage] = useState(1);
 
   useEffect(() => {
     if (!isLoggedIn()) {
@@ -208,6 +211,20 @@ export default function OwnerReconciliationPage() {
         .some((value) => String(value).toLowerCase().includes(normalized))
     );
   }, [query, rows]);
+
+  const mismatchPageCount = Math.max(1, Math.ceil(filteredRows.length / MISMATCH_PAGE_SIZE));
+  const pagedRows = useMemo(() => {
+    const start = (mismatchPage - 1) * MISMATCH_PAGE_SIZE;
+    return filteredRows.slice(start, start + MISMATCH_PAGE_SIZE);
+  }, [filteredRows, mismatchPage]);
+
+  useEffect(() => {
+    setMismatchPage(1);
+  }, [query, rows.length]);
+
+  useEffect(() => {
+    setMismatchPage((page) => Math.min(page, mismatchPageCount));
+  }, [mismatchPageCount]);
 
   const filteredMissingRows = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -361,7 +378,11 @@ export default function OwnerReconciliationPage() {
         <div className="border-b border-[var(--border)] bg-[var(--table-header-bg)] px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">NinjaOne owner mismatches</h2>
-            <span className="text-sm text-[var(--muted)]">{filteredRows.length} shown</span>
+            <span className="text-sm text-[var(--muted)]">
+              {filteredRows.length === 0
+                ? "0 shown"
+                : `${((mismatchPage - 1) * MISMATCH_PAGE_SIZE) + 1}-${Math.min(mismatchPage * MISMATCH_PAGE_SIZE, filteredRows.length)} of ${filteredRows.length}`}
+            </span>
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -379,7 +400,7 @@ export default function OwnerReconciliationPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredRows.map((row) => (
+              {pagedRows.map((row) => (
                 <tr key={row.id} className="border-b border-[var(--border)] transition hover:bg-[var(--table-header-bg)]/50">
                   <td className="table-cell">
                     <div className="font-medium text-[var(--text)]">{row.assetTag}</div>
@@ -419,6 +440,29 @@ export default function OwnerReconciliationPage() {
             </tbody>
           </table>
         </div>
+        {filteredRows.length > MISMATCH_PAGE_SIZE && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] px-4 py-3">
+            <span className="text-sm text-[var(--muted)]">Page {mismatchPage} of {mismatchPageCount}</span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setMismatchPage((page) => Math.max(1, page - 1))}
+                disabled={mismatchPage === 1}
+                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--text)] hover:bg-[var(--table-header-bg)] disabled:opacity-50"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                onClick={() => setMismatchPage((page) => Math.min(mismatchPageCount, page + 1))}
+                disabled={mismatchPage === mismatchPageCount}
+                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--text)] hover:bg-[var(--table-header-bg)] disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
         {filteredRows.length === 0 && (
           <p className="py-12 text-center text-[var(--muted)]">No owner mismatches found.</p>
         )}

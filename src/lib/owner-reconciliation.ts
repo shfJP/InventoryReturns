@@ -319,6 +319,54 @@ function firstString(record: Record<string, unknown>, paths: string[]): string |
   return undefined;
 }
 
+function osSignalFromDevice(device: NinjaOneDevice): string {
+  const details = parseDetailsJson(device);
+  const values = [
+    device.nodeClass,
+    firstString(details, [
+      "nodeClass",
+      "os",
+      "osName",
+      "osType",
+      "operatingSystem",
+      "operatingSystemName",
+      "platform",
+      "system.os",
+      "system.osName",
+      "system.operatingSystem",
+      "hardware.os",
+      "hardware.operatingSystem",
+      "device.os",
+      "device.operatingSystem",
+      "fields.os",
+      "fields.operatingSystem",
+      "customFields.os",
+      "customFields.operatingSystem",
+    ]),
+  ];
+
+  for (const [key, value] of Object.entries(details)) {
+    const normalizedKey = key.toLowerCase();
+    if (
+      normalizedKey.includes("nodeclass") ||
+      normalizedKey === "os" ||
+      normalizedKey.includes("osname") ||
+      normalizedKey.includes("ostype") ||
+      normalizedKey.includes("operatingsystem") ||
+      normalizedKey.includes("platform")
+    ) {
+      values.push(valueToString(value));
+    }
+  }
+
+  return values.filter(Boolean).join(" ").toLowerCase();
+}
+
+function isExcludedNinjaDevice(device: NinjaOneDevice): boolean {
+  const signal = osSignalFromDevice(device);
+  return signal.includes("windows server") || /\blinux\b/.test(signal);
+}
+
 function likelyOwnerFromDevice(device: NinjaOneDevice): string | null {
   if (device.likelyUser) return device.likelyUser;
   const details = parseDetailsJson(device);
@@ -535,12 +583,13 @@ export async function getOwnerReconciliationResult(): Promise<OwnerReconciliatio
       },
     }),
   ]);
+  const eligibleDevices = devices.filter((device) => !isExcludedNinjaDevice(device));
   const aliases = buildUserAliasMap(users.map(summarizeUser));
-  const ninjaIndex = buildNinjaDeviceIndex(devices);
+  const ninjaIndex = buildNinjaDeviceIndex(eligibleDevices);
   const equipmentIdentifiers = buildEquipmentIdentifierSet(equipment);
   const summary: OwnerReconciliationSummary = {
     equipmentCount: equipment.length,
-    ninjaDeviceCount: devices.length,
+    ninjaDeviceCount: eligibleDevices.length,
     matchedDeviceCount: 0,
     missingReftabCount: 0,
     missingNinjaOwnerCount: 0,
