@@ -27,6 +27,8 @@ type UsageResponse = {
     fetchedLoans: number;
     checkedInLoans: number;
     missingReturnedByCount: number;
+    actorFieldHits: Record<string, number>;
+    sampleReturnedLoanKeys: string[];
   };
 };
 
@@ -155,6 +157,21 @@ export default function ReftabUsagePage() {
           <p className="text-xs text-[var(--muted)]">
             Source: Reftab loan history from {data.source.endpoints.join(", ")}. Fetched {data.source.fetchedLoans.toLocaleString()} loan row(s).
           </p>
+          {data.totals.unknownStaffCheckInCount > 0 && (
+            <section className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <div className="font-semibold">Returned-by data was missing from some Reftab loan rows.</div>
+              <p className="mt-1">
+                Actor fields found: {Object.keys(data.source.actorFieldHits).length > 0
+                  ? Object.entries(data.source.actorFieldHits).map(([field, count]) => `${field} (${count})`).join(", ")
+                  : "none"}.
+              </p>
+              {data.source.sampleReturnedLoanKeys.length > 0 && (
+                <p className="mt-1">
+                  Returned loan keys seen: {data.source.sampleReturnedLoanKeys.join(", ")}.
+                </p>
+              )}
+            </section>
+          )}
         </>
       )}
     </div>

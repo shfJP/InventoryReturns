@@ -117,6 +117,8 @@ export type ReftabCheckInUsageResult = {
     fetchedLoans: number;
     checkedInLoans: number;
     missingReturnedByCount: number;
+    actorFieldHits: Record<string, number>;
+    sampleReturnedLoanKeys: string[];
   };
 };
 
@@ -536,6 +538,42 @@ function firstLooseObject(record: Record<string, unknown>, paths: string[]): Rec
     }
   }
   return undefined;
+}
+
+function nestedFieldExists(record: Record<string, unknown>, paths: string[]): string | undefined {
+  for (const path of paths) {
+    const value = getNestedLoose(record, path);
+    if (value !== undefined && value !== null && value !== "") return path;
+  }
+  const keySet = new Set(paths.map((path) => normalizeFieldName(path.split(".").at(-1) ?? path)));
+  for (const candidate of collectRecords(record)) {
+    for (const key of Object.keys(candidate)) {
+      if (keySet.has(normalizeFieldName(key))) return key;
+    }
+  }
+  return undefined;
+}
+
+function collectInterestingKeys(record: Record<string, unknown>): string[] {
+  const interesting = new Set<string>();
+  const patterns = [
+    /return/i,
+    /check.?in/i,
+    /checked/i,
+    /updated/i,
+    /modified/i,
+    /changed/i,
+    /created/i,
+    /user/i,
+    /actor/i,
+    /by$/i,
+  ];
+  for (const candidate of collectRecords(record)) {
+    for (const key of Object.keys(candidate)) {
+      if (patterns.some((pattern) => pattern.test(key))) interesting.add(key);
+    }
+  }
+  return Array.from(interesting).sort((a, b) => a.localeCompare(b)).slice(0, 80);
 }
 
 function paginatedEndpoint(endpoint: string, limit: number, offset: number): string {
@@ -1001,21 +1039,154 @@ function isHistoricalCheckInLoan(loan: Record<string, unknown>): boolean {
   return isInactiveLoanStatus(status) || status === "in";
 }
 
-function returnedByFromLoan(loan: Record<string, unknown>): { displayName: string; email: string; key: string } | null {
-  const userObject = firstLooseObject(loan, [
+const RETURNED_BY_OBJECT_PATHS = [
     "returnedBy",
     "returned_by",
     "checkedInBy",
     "checked_in_by",
+    "checkedInByUser",
+    "checked_in_by_user",
     "checkedInUser",
     "checked_in_user",
+    "checkinUser",
+    "checkin_user",
     "returnUser",
+    "return_user",
     "returnedByUser",
     "returned_by_user",
+    "lastUpdatedBy",
+    "last_updated_by",
+    "updatedBy",
+    "updated_by",
+    "modifiedBy",
+    "modified_by",
+    "changedBy",
+    "changed_by",
+    "editor",
+    "admin",
     "loan.returnedBy",
     "loan.checkedInBy",
+    "loan.checkedInByUser",
     "loan.checkinUser",
-  ]);
+    "loan.updatedBy",
+    "loan.modifiedBy",
+];
+
+const RETURNED_BY_EMAIL_PATHS = [
+  "returnedBy.email",
+  "returnedBy.mail",
+  "returned_by.email",
+  "returnedByUser.email",
+  "returned_by_user.email",
+  "checkedInBy.email",
+  "checked_in_by.email",
+  "checkedInByUser.email",
+  "checked_in_by_user.email",
+  "checkedInUser.email",
+  "checkinUser.email",
+  "returnUser.email",
+  "return_user.email",
+  "updatedBy.email",
+  "updated_by.email",
+  "lastUpdatedBy.email",
+  "last_updated_by.email",
+  "modifiedBy.email",
+  "modified_by.email",
+  "changedBy.email",
+  "changed_by.email",
+  "returnedByEmail",
+  "returned_by_email",
+  "checkedInByEmail",
+  "checked_in_by_email",
+  "checkedInUserEmail",
+  "checked_in_user_email",
+  "returnedUserEmail",
+  "returned_by_user_email",
+  "returnUserEmail",
+  "updatedByEmail",
+  "updated_by_email",
+  "lastUpdatedByEmail",
+  "last_updated_by_email",
+  "modifiedByEmail",
+  "modified_by_email",
+  "changedByEmail",
+  "changed_by_email",
+  "loan.returnedBy.email",
+  "loan.checkedInBy.email",
+  "loan.checkedInByUser.email",
+  "loan.updatedBy.email",
+  "loan.modifiedBy.email",
+];
+
+const RETURNED_BY_NAME_PATHS = [
+  "returnedByName",
+  "returned_by_name",
+  "returnedByUserName",
+  "returned_by_user_name",
+  "checkedInByName",
+  "checked_in_by_name",
+  "checkedInByUserName",
+  "checked_in_by_user_name",
+  "checkedInUserName",
+  "checked_in_user_name",
+  "checkinUserName",
+  "checkin_user_name",
+  "returnedUserName",
+  "returnUserName",
+  "return_user_name",
+  "updatedByName",
+  "updated_by_name",
+  "lastUpdatedByName",
+  "last_updated_by_name",
+  "modifiedByName",
+  "modified_by_name",
+  "changedByName",
+  "changed_by_name",
+  "returnedBy",
+  "returned_by",
+  "checkedInBy",
+  "checked_in_by",
+  "updatedBy",
+  "updated_by",
+  "modifiedBy",
+  "modified_by",
+  "changedBy",
+  "changed_by",
+  "loan.returnedByName",
+  "loan.checkedInByName",
+  "loan.updatedByName",
+  "loan.modifiedByName",
+];
+
+const RETURNED_BY_ID_PATHS = [
+  "returnedById",
+  "returned_by_id",
+  "returnedByUid",
+  "returned_by_uid",
+  "checkedInById",
+  "checked_in_by_id",
+  "checkedInByUid",
+  "checked_in_by_uid",
+  "checkedInByUserId",
+  "checked_in_by_user_id",
+  "returnedUserId",
+  "returnUserId",
+  "updatedById",
+  "updated_by_id",
+  "lastUpdatedById",
+  "last_updated_by_id",
+  "modifiedById",
+  "modified_by_id",
+  "changedById",
+  "changed_by_id",
+  "loan.returnedById",
+  "loan.checkedInById",
+  "loan.updatedById",
+  "loan.modifiedById",
+];
+
+function returnedByFromLoan(loan: Record<string, unknown>): { displayName: string; email: string; key: string; sourceField: string } | null {
+  const userObject = firstLooseObject(loan, RETURNED_BY_OBJECT_PATHS);
   const objectEmail = userObject
     ? firstStringLoose(userObject, ["email", "mail", "emailAddress", "email_address", "upn", "userPrincipalName"])
     : undefined;
@@ -1026,67 +1197,32 @@ function returnedByFromLoan(loan: Record<string, unknown>): { displayName: strin
     ? firstStringLoose(userObject, ["uid", "id", "userId", "user_id", "employeeId", "employee_id"])
     : undefined;
 
-  const email = objectEmail ?? firstStringLoose(loan, [
-    "returnedBy.email",
-    "returnedBy.mail",
-    "returned_by.email",
-    "checkedInBy.email",
-    "checked_in_by.email",
-    "checkedInUser.email",
-    "returnUser.email",
-    "returnedByEmail",
-    "returned_by_email",
-    "checkedInByEmail",
-    "checked_in_by_email",
-    "checkedInUserEmail",
-    "returnedUserEmail",
-    "returned_by_user_email",
-    "returnUserEmail",
-    "loan.returnedBy.email",
-    "loan.checkedInBy.email",
-  ]) ?? firstDeepStringByKey(loan, [
+  const email = objectEmail ?? firstStringLoose(loan, RETURNED_BY_EMAIL_PATHS) ?? firstDeepStringByKey(loan, [
     "Returned By Email",
     "Checked In By Email",
     "Checked-In By Email",
     "Return User Email",
+    "Updated By Email",
+    "Modified By Email",
   ]);
 
-  const nameOrEmail = objectName ?? firstStringLoose(loan, [
-    "returnedByName",
-    "returned_by_name",
-    "checkedInByName",
-    "checked_in_by_name",
-    "checkedInUserName",
-    "returnedUserName",
-    "returned_by_user_name",
-    "returnUserName",
-    "returnedBy",
-    "returned_by",
-    "checkedInBy",
-    "checked_in_by",
-    "loan.returnedByName",
-    "loan.checkedInByName",
-  ]) ?? firstDeepStringByKey(loan, [
+  const nameOrEmail = objectName ?? firstStringLoose(loan, RETURNED_BY_NAME_PATHS) ?? firstDeepStringByKey(loan, [
     "Returned By",
     "Checked In By",
     "Checked-In By",
     "Return User",
     "Returned User",
+    "Updated By",
+    "Modified By",
+    "Changed By",
   ]);
 
-  const id = objectId ?? firstStringLoose(loan, [
-    "returnedById",
-    "returned_by_id",
-    "checkedInById",
-    "checked_in_by_id",
-    "returnedUserId",
-    "returnUserId",
-    "loan.returnedById",
-    "loan.checkedInById",
-  ]) ?? firstDeepStringByKey(loan, [
+  const id = objectId ?? firstStringLoose(loan, RETURNED_BY_ID_PATHS) ?? firstDeepStringByKey(loan, [
     "Returned By Id",
     "Checked In By Id",
     "Checked-In By Id",
+    "Updated By Id",
+    "Modified By Id",
   ]);
 
   const displayName = nameOrEmail && nameOrEmail.includes("@") && !email ? "" : nameOrEmail ?? "";
@@ -1098,6 +1234,7 @@ function returnedByFromLoan(loan: Record<string, unknown>): { displayName: strin
     key,
     displayName: displayName || resolvedEmail || id || "Unknown Reftab user",
     email: resolvedEmail,
+    sourceField: nestedFieldExists(loan, [...RETURNED_BY_EMAIL_PATHS, ...RETURNED_BY_NAME_PATHS, ...RETURNED_BY_ID_PATHS, ...RETURNED_BY_OBJECT_PATHS]) ?? "deep-key",
   };
 }
 
@@ -1798,7 +1935,14 @@ export async function fetchReftabCheckInUsage(): Promise<ReftabCheckInUsageResul
     return {
       rows: [],
       totals: { staffCount: 0, totalCheckedIn: 0, unknownStaffCheckInCount: 0 },
-      source: { endpoints: REF_TAB_USAGE_LOANS_ENDPOINTS, fetchedLoans: 0, checkedInLoans: 0, missingReturnedByCount: 0 },
+      source: {
+        endpoints: REF_TAB_USAGE_LOANS_ENDPOINTS,
+        fetchedLoans: 0,
+        checkedInLoans: 0,
+        missingReturnedByCount: 0,
+        actorFieldHits: {},
+        sampleReturnedLoanKeys: [],
+      },
     };
   }
 
@@ -1808,6 +1952,8 @@ export async function fetchReftabCheckInUsage(): Promise<ReftabCheckInUsageResul
   let checkedInLoans = 0;
   let totalCheckedIn = 0;
   let missingReturnedByCount = 0;
+  const actorFieldHits = new Map<string, number>();
+  const sampleReturnedLoanKeys = new Set<string>();
 
   for (const endpoint of REF_TAB_USAGE_LOANS_ENDPOINTS) {
     const loans = await fetchReftabLoanUsageRecords(endpoint);
@@ -1817,6 +1963,11 @@ export async function fetchReftabCheckInUsage(): Promise<ReftabCheckInUsageResul
       if (!isHistoricalCheckInLoan(loan)) continue;
 
       const returnedBy = returnedByFromLoan(loan);
+      if (returnedBy) {
+        actorFieldHits.set(returnedBy.sourceField, (actorFieldHits.get(returnedBy.sourceField) ?? 0) + 1);
+      } else if (sampleReturnedLoanKeys.size < 80) {
+        for (const key of collectInterestingKeys(loan)) sampleReturnedLoanKeys.add(key);
+      }
       const staffKey = returnedBy?.key ?? "__unknown_reftab_user";
       const identity = loanUsageIdentity(loan, staffKey);
       if (identity && seenLoans.has(identity)) continue;
@@ -1858,6 +2009,8 @@ export async function fetchReftabCheckInUsage(): Promise<ReftabCheckInUsageResul
       fetchedLoans,
       checkedInLoans,
       missingReturnedByCount,
+      actorFieldHits: Object.fromEntries(Array.from(actorFieldHits.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))),
+      sampleReturnedLoanKeys: Array.from(sampleReturnedLoanKeys).sort((a, b) => a.localeCompare(b)).slice(0, 80),
     },
   };
 }
