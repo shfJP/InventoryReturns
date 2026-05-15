@@ -23,6 +23,11 @@ const REF_TAB_SYNC_SOURCE = (process.env.REF_TAB_SYNC_SOURCE ?? "loans").trim().
 const REF_TAB_CHECKIN_ENDPOINT_TEMPLATE = (process.env.REF_TAB_CHECKIN_ENDPOINT_TEMPLATE ?? "loans/{loanId}/checkin").trim();
 const REF_TAB_CHECKOUT_ENDPOINT = (process.env.REF_TAB_CHECKOUT_ENDPOINT ?? "loans").trim();
 const REF_TAB_CREATE_ASSET_ENDPOINT = (process.env.REF_TAB_CREATE_ASSET_ENDPOINT ?? "assets").trim();
+const REF_TAB_CREATE_LOANEE_ENDPOINT = (process.env.REF_TAB_CREATE_LOANEE_ENDPOINT ?? "loanees").trim();
+const REF_TAB_LOANEE_LOOKUP_ENDPOINTS = (process.env.REF_TAB_LOANEE_LOOKUP_ENDPOINTS ?? "loanees?email={email},loanees?search={email},loanees?q={email}")
+  .split(",")
+  .map((endpoint) => endpoint.trim())
+  .filter(Boolean);
 const REF_TAB_CREATE_ASSET_CATEGORY_ID = (process.env.REF_TAB_CREATE_ASSET_CATEGORY_ID ?? "").trim();
 const REF_TAB_CREATE_ASSET_LAPTOP_CATEGORY_ID = (process.env.REF_TAB_CREATE_ASSET_LAPTOP_CATEGORY_ID ?? "").trim();
 const REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID = (process.env.REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID ?? "").trim();
@@ -112,6 +117,24 @@ function getNested(obj: unknown, path: string): unknown {
   return cur;
 }
 
+function getNestedLoose(obj: unknown, path: string): unknown {
+  if (!path || obj == null || typeof obj !== "object") return undefined;
+  let cur: unknown = obj;
+  for (const p of path.split(".")) {
+    if (cur == null || typeof cur !== "object") return undefined;
+    const record = cur as Record<string, unknown>;
+    if (p in record) {
+      cur = record[p];
+      continue;
+    }
+    const normalized = p.toLowerCase().replace(/[_-]/g, "");
+    const key = Object.keys(record).find((candidate) => candidate.toLowerCase().replace(/[_-]/g, "") === normalized);
+    if (!key) return undefined;
+    cur = record[key];
+  }
+  return cur;
+}
+
 function assigneeToMatchString(value: unknown): string | null {
   if (value == null) return null;
   if (typeof value === "string" || typeof value === "number") return String(value).trim();
@@ -142,6 +165,14 @@ function valueToString(value: unknown): string | undefined {
 function firstString(obj: Record<string, unknown>, paths: string[]): string | undefined {
   for (const path of paths) {
     const value = valueToString(getNested(obj, path));
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function firstStringLoose(obj: Record<string, unknown>, paths: string[]): string | undefined {
+  for (const path of paths) {
+    const value = valueToString(getNestedLoose(obj, path));
     if (value) return value;
   }
   return undefined;
@@ -416,6 +447,25 @@ async function fetchReftabJson(endpoint: string, label: string): Promise<unknown
   return res.json();
 }
 
+async function fetchOptionalReftabJson(endpoint: string, label: string): Promise<unknown | null> {
+  const cleanEndpoint = endpoint.startsWith("/") ? endpoint.slice(1) : endpoint;
+  const fullUrl = `${REF_TAB_URL}/${cleanEndpoint}`;
+  const headers = signReftabRequest(fullUrl, "GET");
+  const res = await fetchWithTimeout(
+    fullUrl,
+    { method: "GET", headers, cache: "no-store" },
+    REF_TAB_TIMEOUT_MS,
+    label
+  );
+  if (res.status === 400 || res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(`${label} returned ${res.status}: ${await res.text()}`);
+  }
+  return res.json();
+}
+
 async function sendReftabJson(endpoint: string, method: "POST" | "PUT" | "DELETE", label: string, body?: Record<string, unknown>): Promise<unknown> {
   if (!REF_TAB_PUBLIC || !REF_TAB_SECRET) {
     throw new Error("Reftab is not configured. Set REF_TAB_API_PUBLIC_KEY and REF_TAB_API_SECRET_KEY.");
@@ -595,12 +645,7 @@ async function fetchAllReftabLoanees(): Promise<ReftabLoanee[]> {
     const list = listFromResponse(data);
     if (list.length === 0) break;
     for (const item of list) {
-      out.push({
-        email: firstString(item, ["email", "mail", "user.email", "loanee.email"]),
-        uid: firstString(item, ["uid", "user.uid"]),
-        lnid: firstString(item, ["lnid", "loaneeId", "loanee_id", "id", "_id", "loanee.lnid", "loanee.id"]),
-        ...managerInfoFromRecord(item),
-      });
+      out.push(loaneeFromApiRecord(item));
     }
     if (list.length < limit) break;
     offset += limit;
@@ -608,6 +653,44 @@ async function fetchAllReftabLoanees(): Promise<ReftabLoanee[]> {
 
   console.info(`[reftab] Fetched ${out.length} loanee/user record(s).`);
   return out;
+}
+
+function loaneeFromApiRecord(record: Record<string, unknown>): ReftabLoanee {
+  const nested = ["loanee", "data", "result", "item"].find((key) => {
+    const value = getNestedLoose(record, key);
+    return value != null && typeof value === "object" && !Array.isArray(value);
+  });
+  if (nested) return loaneeFromApiRecord(getNestedLoose(record, nested) as Record<string, unknown>);
+
+  return {
+    email: firstStringLoose(record, [
+      "email",
+      "mail",
+      "emailAddress",
+      "email_address",
+      "loaneeEmail",
+      "loanee_email",
+      "user.email",
+      "user.mail",
+      "user.emailAddress",
+      "loanee.email",
+      "loanee.mail",
+      "loanee.emailAddress",
+    ]),
+    uid: firstStringLoose(record, ["uid", "employeeId", "employee_id", "user.uid", "user.employeeId", "loanee.uid", "loanee.employeeId"]),
+    lnid: firstStringLoose(record, [
+      "lnid",
+      "loaneeId",
+      "loanee_id",
+      "loaneeID",
+      "id",
+      "_id",
+      "loanee.lnid",
+      "loanee.loaneeId",
+      "loanee.id",
+    ]),
+    ...managerInfoFromRecord(record),
+  };
 }
 
 function getLoanAssignee(loan: Record<string, unknown>, loaneeMaps: LoaneeMaps): string | undefined {
@@ -789,18 +872,69 @@ function loaneeMatches(loanee: ReftabLoanee, user: { employeeId: string; email: 
   return Boolean(lnid && employeeId && uid === employeeId);
 }
 
+function loaneeWithIdFromResponse(data: unknown, user: { employeeId: string; email: string }): ReftabLoanee | null {
+  if (data == null) return null;
+  const records = listFromResponse(data);
+  const candidates = records.length > 0
+    ? records.map(loaneeFromApiRecord)
+    : data != null && typeof data === "object" && !Array.isArray(data)
+      ? [loaneeFromApiRecord(data as Record<string, unknown>)]
+      : [];
+  return candidates.find((loanee) => loaneeMatches(loanee, user) && valueToString(loanee.lnid)) ?? null;
+}
+
 async function findLoaneeForUser(user: { employeeId: string; email: string }): Promise<ReftabLoanee | null> {
   const loanees = await fetchAllReftabLoanees();
   const matches = loanees.filter((loanee) => loaneeMatches(loanee, user));
   return matches.find((loanee) => valueToString(loanee.lnid)) ?? matches[0] ?? null;
 }
 
-function checkoutLoaneeIdFromRecord(loanee: ReftabLoanee | null, user: { employeeId: string; email: string }): string {
-  const lnid = valueToString(loanee?.lnid);
-  if (!lnid) {
-    throw new Error(`Could not find a Reftab loanee id (lnid) for ${user.email || user.employeeId}.`);
+async function lookupLoaneeForUser(user: { employeeId: string; email: string }): Promise<ReftabLoanee | null> {
+  const email = encodeURIComponent(user.email);
+  const employeeId = encodeURIComponent(user.employeeId);
+  for (const template of REF_TAB_LOANEE_LOOKUP_ENDPOINTS) {
+    const endpoint = template
+      .replace(/\{email\}/g, email)
+      .replace(/\{employeeId\}/g, employeeId)
+      .replace(/\{uid\}/g, employeeId);
+    const data = await fetchOptionalReftabJson(endpoint, `Reftab loanee lookup ${user.email || user.employeeId}`);
+    const loanee = loaneeWithIdFromResponse(data, user);
+    if (loanee) return loanee;
   }
-  return lnid;
+  return null;
+}
+
+async function createReftabLoanee(user: { employeeId: string; email: string; displayName?: string }): Promise<ReftabLoanee> {
+  const name = user.displayName?.trim() || user.email || user.employeeId;
+  const created = await sendReftabJson(REF_TAB_CREATE_LOANEE_ENDPOINT, "POST", `Reftab create loanee ${user.email || user.employeeId}`, {
+    name,
+    email: user.email,
+    uid: user.employeeId,
+  });
+  if (created != null && typeof created === "object" && !Array.isArray(created)) {
+    return loaneeFromApiRecord(created as Record<string, unknown>);
+  }
+  return {};
+}
+
+async function checkoutLoaneeIdForUser(user: { employeeId: string; email: string; displayName?: string }): Promise<string> {
+  const existingLoanee = await findLoaneeForUser(user);
+  const existingLnid = valueToString(existingLoanee?.lnid);
+  if (existingLnid) return existingLnid;
+
+  const lookedUpLoanee = await lookupLoaneeForUser(user);
+  const lookedUpLnid = valueToString(lookedUpLoanee?.lnid);
+  if (lookedUpLnid) return lookedUpLnid;
+
+  const createdLoanee = await createReftabLoanee(user);
+  const createdLnid = valueToString(createdLoanee.lnid);
+  if (createdLnid) return createdLnid;
+
+  const refreshedLoanee = await findLoaneeForUser(user);
+  const refreshedLnid = valueToString(refreshedLoanee?.lnid);
+  if (refreshedLnid) return refreshedLnid;
+
+  throw new Error(`Could not find or create a Reftab loanee id (lnid) for ${user.email || user.employeeId}.`);
 }
 
 function checkinEndpoint(loanId: string): string {
@@ -814,6 +948,7 @@ export type ReftabOwnerReconciliationInput = {
   aid?: string | null;
   newOwnerEmployeeId: string;
   newOwnerEmail: string;
+  newOwnerName?: string;
   note?: string;
 };
 
@@ -832,8 +967,7 @@ export async function reconcileReftabAssetOwner(input: ReftabOwnerReconciliation
     throw new Error(`Could not find an active Reftab loan for asset ${input.assetTag}. Run Reftab sync and try again.`);
   }
 
-  const newLoanee = await findLoaneeForUser({ employeeId: input.newOwnerEmployeeId, email: input.newOwnerEmail });
-  const loaneeId = checkoutLoaneeIdFromRecord(newLoanee, { employeeId: input.newOwnerEmployeeId, email: input.newOwnerEmail });
+  const loaneeId = await checkoutLoaneeIdForUser({ employeeId: input.newOwnerEmployeeId, email: input.newOwnerEmail, displayName: input.newOwnerName });
   const checkoutLoaneeId = numericRequiredId(loaneeId, "Reftab loanee id");
 
   const aid = input.aid ?? currentLoan.assignment.aid ?? input.assetTag;
@@ -858,6 +992,7 @@ export type ReftabCreateAndAssignInput = {
   model?: string | null;
   newOwnerEmployeeId: string;
   newOwnerEmail: string;
+  newOwnerName?: string;
   note?: string;
 };
 
@@ -1036,8 +1171,7 @@ async function inferCreateAssetLocationId(input: ReftabCreateAndAssignInput): Pr
 }
 
 export async function createAndAssignReftabAsset(input: ReftabCreateAndAssignInput): Promise<{ aid: string; loaneeId: string }> {
-  const newLoanee = await findLoaneeForUser({ employeeId: input.newOwnerEmployeeId, email: input.newOwnerEmail });
-  const loaneeId = checkoutLoaneeIdFromRecord(newLoanee, { employeeId: input.newOwnerEmployeeId, email: input.newOwnerEmail });
+  const loaneeId = await checkoutLoaneeIdForUser({ employeeId: input.newOwnerEmployeeId, email: input.newOwnerEmail, displayName: input.newOwnerName });
   const checkoutLoaneeId = numericRequiredId(loaneeId, "Reftab loanee id");
 
   const note = input.note ?? `Created from NinjaOne reconciliation for ${input.assetTag}.`;

@@ -84,6 +84,7 @@ export async function POST(req: NextRequest) {
         title: row.title,
         newOwnerEmployeeId: row.ninjaOwner.employeeId,
         newOwnerEmail: row.ninjaOwner.email,
+        newOwnerName: row.ninjaOwner.displayName,
         note: `Asset created from NinjaOne device ${row.ninjaDevice.id} and assigned to ${row.ninjaOwner.employeeId}.`,
       });
 
@@ -131,6 +132,7 @@ export async function POST(req: NextRequest) {
       aid: row.aid,
       newOwnerEmployeeId: row.ninjaOwner.employeeId,
       newOwnerEmail: row.ninjaOwner.email,
+      newOwnerName: row.ninjaOwner.displayName,
       note: `Owner reconciliation approved from NinjaOne device ${row.ninjaDevice.id}. Previous Reftab owner: ${row.reftabOwnerEmployeeId}.`,
     });
 
