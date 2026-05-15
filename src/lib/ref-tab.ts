@@ -34,6 +34,7 @@ const REF_TAB_CREATE_ASSET_DESKTOP_CATEGORY_ID = (process.env.REF_TAB_CREATE_ASS
 const REF_TAB_CREATE_ASSET_LAPTOP_CATEGORY_ID = (process.env.REF_TAB_CREATE_ASSET_LAPTOP_CATEGORY_ID ?? "").trim();
 const REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID = (process.env.REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID ?? "").trim();
 const REF_TAB_CREATE_ASSET_LOCATION_ID = (process.env.REF_TAB_CREATE_ASSET_LOCATION_ID ?? "67497").trim();
+const REF_TAB_CREATE_ASSET_SERVICE_TAG_FIELD = (process.env.REF_TAB_CREATE_ASSET_SERVICE_TAG_FIELD ?? "Service Tag").trim();
 
 export type RefTabAssignment = {
   asset_tag: string;
@@ -1226,6 +1227,16 @@ function numericRequiredId(value: string | undefined, label: string): number {
   return Number(value);
 }
 
+function addServiceTagField(body: Record<string, unknown>, input: ReftabCreateAndAssignInput): void {
+  const serviceTag = input.serial ?? input.assetTag;
+  if (!serviceTag || !REF_TAB_CREATE_ASSET_SERVICE_TAG_FIELD) return;
+  body[REF_TAB_CREATE_ASSET_SERVICE_TAG_FIELD] = serviceTag;
+  body.fields = {
+    ...(body.fields != null && typeof body.fields === "object" && !Array.isArray(body.fields) ? body.fields as Record<string, unknown> : {}),
+    [REF_TAB_CREATE_ASSET_SERVICE_TAG_FIELD]: serviceTag,
+  };
+}
+
 function explicitCreateAssetCategoryId(input: ReftabCreateAndAssignInput): string | undefined {
   const tokens = tokenSet([input.title, input.model, input.assetTag, input.serial].filter(Boolean).join(" "));
   if ((tokens.has("tb") || tokens.has("tablet")) && REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID) {
@@ -1364,6 +1375,7 @@ export async function createAndAssignReftabAsset(input: ReftabCreateAndAssignInp
     serial: input.serial ?? undefined,
     notes: note,
   };
+  addServiceTagField(createBody, input);
   if (input.model) createBody.model = input.model;
   const categoryId = await inferCreateAssetCategoryId(input);
   const numericCategoryId = numericId(categoryId);
