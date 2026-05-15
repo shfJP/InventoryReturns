@@ -30,6 +30,7 @@ const REF_TAB_LOANEE_LOOKUP_ENDPOINTS = (process.env.REF_TAB_LOANEE_LOOKUP_ENDPO
   .map((endpoint) => endpoint.trim())
   .filter(Boolean);
 const REF_TAB_CREATE_ASSET_CATEGORY_ID = (process.env.REF_TAB_CREATE_ASSET_CATEGORY_ID ?? "").trim();
+const REF_TAB_CREATE_ASSET_DESKTOP_CATEGORY_ID = (process.env.REF_TAB_CREATE_ASSET_DESKTOP_CATEGORY_ID ?? "").trim();
 const REF_TAB_CREATE_ASSET_LAPTOP_CATEGORY_ID = (process.env.REF_TAB_CREATE_ASSET_LAPTOP_CATEGORY_ID ?? "").trim();
 const REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID = (process.env.REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID ?? "").trim();
 const REF_TAB_CREATE_ASSET_LOCATION_ID = (process.env.REF_TAB_CREATE_ASSET_LOCATION_ID ?? "67497").trim();
@@ -1196,9 +1197,10 @@ function tokenSet(value: string | null | undefined): Set<string> {
   const tokens = new Set<string>();
   for (const token of value?.toLowerCase().match(/[a-z0-9]+/g) ?? []) {
     if (["the", "and", "for", "with", "asset", "device"].includes(token)) continue;
-    if (token.length >= 3 || token === "lt" || token === "tb") tokens.add(token);
+    if (token.length >= 3 || ["dt", "lt", "pc", "tb"].includes(token)) tokens.add(token);
     if (token.length > 4 && token.endsWith("s")) tokens.add(token.slice(0, -1));
-    if (token === "lt") tokens.add("laptop");
+    if (token === "dt" || token === "pc") tokens.add("desktop");
+    if (token === "lt" || token === "ltp") tokens.add("laptop");
     if (token === "tb") tokens.add("tablet");
   }
   return tokens;
@@ -1228,8 +1230,11 @@ function explicitCreateAssetCategoryId(input: ReftabCreateAndAssignInput): strin
   if ((tokens.has("tb") || tokens.has("tablet")) && REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID) {
     return REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID;
   }
-  if ((tokens.has("lt") || tokens.has("laptop")) && REF_TAB_CREATE_ASSET_LAPTOP_CATEGORY_ID) {
+  if ((tokens.has("lt") || tokens.has("ltp") || tokens.has("laptop")) && REF_TAB_CREATE_ASSET_LAPTOP_CATEGORY_ID) {
     return REF_TAB_CREATE_ASSET_LAPTOP_CATEGORY_ID;
+  }
+  if ((tokens.has("pc") || tokens.has("dt") || tokens.has("desktop")) && REF_TAB_CREATE_ASSET_DESKTOP_CATEGORY_ID) {
+    return REF_TAB_CREATE_ASSET_DESKTOP_CATEGORY_ID;
   }
   return undefined;
 }
@@ -1361,7 +1366,7 @@ export async function createAndAssignReftabAsset(input: ReftabCreateAndAssignInp
   const numericCategoryId = numericId(categoryId);
   if (numericCategoryId === undefined) {
     throw new Error(
-      "Could not determine a Reftab category id for this new asset. Set REF_TAB_CREATE_ASSET_LAPTOP_CATEGORY_ID, REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID, or REF_TAB_CREATE_ASSET_CATEGORY_ID."
+      "Could not determine a Reftab category id for this new asset. Set REF_TAB_CREATE_ASSET_DESKTOP_CATEGORY_ID, REF_TAB_CREATE_ASSET_LAPTOP_CATEGORY_ID, REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID, or REF_TAB_CREATE_ASSET_CATEGORY_ID."
     );
   }
   if (numericCategoryId !== undefined) createBody.cid = numericCategoryId;
