@@ -102,7 +102,9 @@ export type ReftabCheckInUsageRow = {
   displayName: string;
   email: string;
   checkedInCount: number;
-  percentOfTotal: number;
+  checkedOutCount: number;
+  percentOfCheckIns: number;
+  percentOfCheckOuts: number;
 };
 
 export type ReftabCheckInUsageResult = {
@@ -110,15 +112,21 @@ export type ReftabCheckInUsageResult = {
   totals: {
     staffCount: number;
     totalCheckedIn: number;
+    totalCheckedOut: number;
     unknownStaffCheckInCount: number;
+    unknownStaffCheckOutCount: number;
   };
   source: {
     endpoints: string[];
     fetchedLoans: number;
     checkedInLoans: number;
+    checkedOutLoans: number;
     missingReturnedByCount: number;
-    actorFieldHits: Record<string, number>;
+    missingCheckedOutByCount: number;
+    checkInActorFieldHits: Record<string, number>;
+    checkOutActorFieldHits: Record<string, number>;
     sampleReturnedLoanKeys: string[];
+    sampleCheckedOutLoanKeys: string[];
   };
 };
 
@@ -1206,8 +1214,159 @@ const RETURNED_BY_ID_PATHS = [
   "loan.modifiedById",
 ];
 
-function returnedByFromLoan(loan: Record<string, unknown>): { displayName: string; email: string; key: string; sourceField: string } | null {
-  const userObject = firstLooseObject(loan, RETURNED_BY_OBJECT_PATHS);
+const CHECKED_OUT_BY_OBJECT_PATHS = [
+  "checkedOutBy",
+  "checked_out_by",
+  "checkedOutByUser",
+  "checked_out_by_user",
+  "checkoutUser",
+  "checkout_user",
+  "loaner",
+  "loanerUser",
+  "loaner_user",
+  "lender",
+  "lenderUser",
+  "lender_user",
+  "issuer",
+  "issuedBy",
+  "issued_by",
+  "assignedBy",
+  "assigned_by",
+  "createdBy",
+  "created_by",
+  "creator",
+  "loan.checkedOutBy",
+  "loan.loaner",
+  "loan.lender",
+  "loan.createdBy",
+];
+
+const CHECKED_OUT_BY_EMAIL_PATHS = [
+  "checkedOutBy.email",
+  "checked_out_by.email",
+  "checkedOutByUser.email",
+  "checked_out_by_user.email",
+  "checkoutUser.email",
+  "checkout_user.email",
+  "loaner.email",
+  "loaner.mail",
+  "loanerUser.email",
+  "loaner_user.email",
+  "lender.email",
+  "lender.mail",
+  "lenderUser.email",
+  "lender_user.email",
+  "issuer.email",
+  "issuedBy.email",
+  "issued_by.email",
+  "assignedBy.email",
+  "assigned_by.email",
+  "createdBy.email",
+  "created_by.email",
+  "creator.email",
+  "checkedOutByEmail",
+  "checked_out_by_email",
+  "checkedOutByUserEmail",
+  "checked_out_by_user_email",
+  "checkoutUserEmail",
+  "checkout_user_email",
+  "loanerEmail",
+  "loaner_email",
+  "loanerUserEmail",
+  "loaner_user_email",
+  "lenderEmail",
+  "lender_email",
+  "issuedByEmail",
+  "issued_by_email",
+  "assignedByEmail",
+  "assigned_by_email",
+  "createdByEmail",
+  "created_by_email",
+  "creatorEmail",
+  "loan.checkedOutBy.email",
+  "loan.loaner.email",
+  "loan.lender.email",
+  "loan.createdBy.email",
+];
+
+const CHECKED_OUT_BY_NAME_PATHS = [
+  "checkedOutByName",
+  "checked_out_by_name",
+  "checkedOutByUserName",
+  "checked_out_by_user_name",
+  "checkoutUserName",
+  "checkout_user_name",
+  "loanerName",
+  "loaner_name",
+  "loanerUserName",
+  "loaner_user_name",
+  "lenderName",
+  "lender_name",
+  "issuedByName",
+  "issued_by_name",
+  "assignedByName",
+  "assigned_by_name",
+  "createdByName",
+  "created_by_name",
+  "creatorName",
+  "checkedOutBy",
+  "checked_out_by",
+  "loaner",
+  "lender",
+  "issuedBy",
+  "issued_by",
+  "assignedBy",
+  "assigned_by",
+  "createdBy",
+  "created_by",
+  "creator",
+  "loan.checkedOutByName",
+  "loan.loanerName",
+  "loan.lenderName",
+  "loan.createdByName",
+];
+
+const CHECKED_OUT_BY_ID_PATHS = [
+  "checkedOutById",
+  "checked_out_by_id",
+  "checkedOutByUid",
+  "checked_out_by_uid",
+  "checkedOutByUserId",
+  "checked_out_by_user_id",
+  "checkoutUserId",
+  "checkout_user_id",
+  "loanerId",
+  "loaner_id",
+  "loanerUid",
+  "loaner_uid",
+  "lenderId",
+  "lender_id",
+  "issuedById",
+  "issued_by_id",
+  "assignedById",
+  "assigned_by_id",
+  "createdById",
+  "created_by_id",
+  "creatorId",
+  "loan.checkedOutById",
+  "loan.loanerId",
+  "loan.lenderId",
+  "loan.createdById",
+];
+
+type ReftabUsageActor = { displayName: string; email: string; key: string; sourceField: string };
+
+function actorFromLoan(
+  loan: Record<string, unknown>,
+  objectPaths: string[],
+  emailPaths: string[],
+  namePaths: string[],
+  idPaths: string[],
+  emailLabels: string[],
+  nameLabels: string[],
+  idLabels: string[]
+): ReftabUsageActor | null {
+  const userObject = firstLooseObject(loan, objectPaths);
   const objectEmail = userObject
     ? firstStringLoose(userObject, ["email", "mail", "emailAddress", "email_address", "upn", "userPrincipalName"])
     : undefined;
@@ -1218,36 +1377,9 @@ function returnedByFromLoan(loan: Record<string, unknown>): { displayName: strin
     ? firstStringLoose(userObject, ["uid", "id", "userId", "user_id", "employeeId", "employee_id"])
     : undefined;
 
-  const email = objectEmail ?? firstStringLoose(loan, RETURNED_BY_EMAIL_PATHS) ?? firstDeepStringByKey(loan, [
-    "Returned By Email",
-    "Checked In By Email",
-    "Checked-In By Email",
-    "Return User Email",
-    "Returner Email",
-    "Updated By Email",
-    "Modified By Email",
-  ]);
-
-  const nameOrEmail = objectName ?? firstStringLoose(loan, RETURNED_BY_NAME_PATHS) ?? firstDeepStringByKey(loan, [
-    "Returned By",
-    "Checked In By",
-    "Checked-In By",
-    "Return User",
-    "Returner",
-    "Returned User",
-    "Updated By",
-    "Modified By",
-    "Changed By",
-  ]);
-
-  const id = objectId ?? firstStringLoose(loan, RETURNED_BY_ID_PATHS) ?? firstDeepStringByKey(loan, [
-    "Returned By Id",
-    "Checked In By Id",
-    "Checked-In By Id",
-    "Returner Id",
-    "Updated By Id",
-    "Modified By Id",
-  ]);
+  const email = objectEmail ?? firstStringLoose(loan, emailPaths) ?? firstDeepStringByKey(loan, emailLabels);
+  const nameOrEmail = objectName ?? firstStringLoose(loan, namePaths) ?? firstDeepStringByKey(loan, nameLabels);
+  const id = objectId ?? firstStringLoose(loan, idPaths) ?? firstDeepStringByKey(loan, idLabels);
 
   const displayName = nameOrEmail && nameOrEmail.includes("@") && !email ? "" : nameOrEmail ?? "";
   const resolvedEmail = email ?? (nameOrEmail?.includes("@") ? nameOrEmail : "");
@@ -1258,8 +1390,87 @@ function returnedByFromLoan(loan: Record<string, unknown>): { displayName: strin
     key,
     displayName: displayName || resolvedEmail || id || "Unknown Reftab user",
     email: resolvedEmail,
-    sourceField: nestedFieldExists(loan, [...RETURNED_BY_EMAIL_PATHS, ...RETURNED_BY_NAME_PATHS, ...RETURNED_BY_ID_PATHS, ...RETURNED_BY_OBJECT_PATHS]) ?? "deep-key",
+    sourceField: nestedFieldExists(loan, [...emailPaths, ...namePaths, ...idPaths, ...objectPaths]) ?? "deep-key",
   };
+}
+
+function returnedByFromLoan(loan: Record<string, unknown>): ReftabUsageActor | null {
+  return actorFromLoan(
+    loan,
+    RETURNED_BY_OBJECT_PATHS,
+    RETURNED_BY_EMAIL_PATHS,
+    RETURNED_BY_NAME_PATHS,
+    RETURNED_BY_ID_PATHS,
+    [
+    "Returned By Email",
+    "Checked In By Email",
+    "Checked-In By Email",
+    "Return User Email",
+    "Returner Email",
+    "Updated By Email",
+    "Modified By Email",
+    ],
+    [
+    "Returned By",
+    "Checked In By",
+    "Checked-In By",
+    "Return User",
+    "Returner",
+    "Returned User",
+    "Updated By",
+    "Modified By",
+    "Changed By",
+    ],
+    [
+    "Returned By Id",
+    "Checked In By Id",
+    "Checked-In By Id",
+    "Returner Id",
+    "Updated By Id",
+    "Modified By Id",
+    ]
+  );
+}
+
+function checkedOutByFromLoan(loan: Record<string, unknown>): ReftabUsageActor | null {
+  return actorFromLoan(
+    loan,
+    CHECKED_OUT_BY_OBJECT_PATHS,
+    CHECKED_OUT_BY_EMAIL_PATHS,
+    CHECKED_OUT_BY_NAME_PATHS,
+    CHECKED_OUT_BY_ID_PATHS,
+    [
+      "Checked Out By Email",
+      "Checked-Out By Email",
+      "Checkout User Email",
+      "Loaner Email",
+      "Lender Email",
+      "Issued By Email",
+      "Assigned By Email",
+      "Created By Email",
+    ],
+    [
+      "Checked Out By",
+      "Checked-Out By",
+      "Checkout User",
+      "Loaner",
+      "Lender",
+      "Issued By",
+      "Assigned By",
+      "Created By",
+      "Creator",
+    ],
+    [
+      "Checked Out By Id",
+      "Checked-Out By Id",
+      "Checkout User Id",
+      "Loaner Id",
+      "Lender Id",
+      "Issued By Id",
+      "Assigned By Id",
+      "Created By Id",
+    ]
+  );
 }
 
 function loanItemCount(loan: Record<string, unknown>): number {
@@ -1958,83 +2169,124 @@ export async function fetchReftabCheckInUsage(): Promise<ReftabCheckInUsageResul
     console.warn("[reftab] Check-in usage skipped: REF_TAB_API_PUBLIC_KEY or REF_TAB_API_SECRET_KEY is not configured.");
     return {
       rows: [],
-      totals: { staffCount: 0, totalCheckedIn: 0, unknownStaffCheckInCount: 0 },
+      totals: { staffCount: 0, totalCheckedIn: 0, totalCheckedOut: 0, unknownStaffCheckInCount: 0, unknownStaffCheckOutCount: 0 },
       source: {
         endpoints: REF_TAB_USAGE_LOANS_ENDPOINTS,
         fetchedLoans: 0,
         checkedInLoans: 0,
+        checkedOutLoans: 0,
         missingReturnedByCount: 0,
-        actorFieldHits: {},
+        missingCheckedOutByCount: 0,
+        checkInActorFieldHits: {},
+        checkOutActorFieldHits: {},
         sampleReturnedLoanKeys: [],
+        sampleCheckedOutLoanKeys: [],
       },
     };
   }
 
   const byStaff = new Map<string, ReftabCheckInUsageRow>();
-  const seenLoans = new Set<string>();
+  const seenCheckInLoans = new Set<string>();
+  const seenCheckOutLoans = new Set<string>();
   let fetchedLoans = 0;
   let checkedInLoans = 0;
+  let checkedOutLoans = 0;
   let totalCheckedIn = 0;
+  let totalCheckedOut = 0;
   let missingReturnedByCount = 0;
-  const actorFieldHits = new Map<string, number>();
+  let missingCheckedOutByCount = 0;
+  const checkInActorFieldHits = new Map<string, number>();
+  const checkOutActorFieldHits = new Map<string, number>();
   const sampleReturnedLoanKeys = new Set<string>();
+  const sampleCheckedOutLoanKeys = new Set<string>();
+
+  function rowForActor(actor: ReftabUsageActor | null, unknownLabel: string): ReftabCheckInUsageRow {
+    const staffKey = actor?.key ?? unknownLabel;
+    const row = byStaff.get(staffKey) ?? {
+      staffKey,
+      displayName: actor?.displayName ?? "Unknown Reftab user",
+      email: actor?.email ?? "",
+      checkedInCount: 0,
+      checkedOutCount: 0,
+      percentOfCheckIns: 0,
+      percentOfCheckOuts: 0,
+    };
+    byStaff.set(staffKey, row);
+    return row;
+  }
 
   for (const endpoint of REF_TAB_USAGE_LOANS_ENDPOINTS) {
     const loans = await fetchReftabLoanUsageRecords(endpoint);
     fetchedLoans += loans.length;
 
     for (const loan of loans) {
+      const checkedOutBy = checkedOutByFromLoan(loan);
+      const checkOutIdentity = loanUsageIdentity(loan, checkedOutBy?.key ?? "__unknown_reftab_checkout_user");
+      if (checkOutIdentity && !seenCheckOutLoans.has(checkOutIdentity)) {
+        seenCheckOutLoans.add(checkOutIdentity);
+        const itemCount = loanItemCount(loan);
+        checkedOutLoans++;
+        totalCheckedOut += itemCount;
+        if (checkedOutBy) {
+          checkOutActorFieldHits.set(checkedOutBy.sourceField, (checkOutActorFieldHits.get(checkedOutBy.sourceField) ?? 0) + 1);
+        } else {
+          missingCheckedOutByCount += itemCount;
+          if (sampleCheckedOutLoanKeys.size < 80) {
+            for (const key of collectInterestingKeys(loan)) sampleCheckedOutLoanKeys.add(key);
+          }
+        }
+        rowForActor(checkedOutBy, "__unknown_reftab_checkout_user").checkedOutCount += itemCount;
+      }
+
       if (!isHistoricalCheckInLoan(loan)) continue;
 
       const returnedBy = returnedByFromLoan(loan);
       if (returnedBy) {
-        actorFieldHits.set(returnedBy.sourceField, (actorFieldHits.get(returnedBy.sourceField) ?? 0) + 1);
+        checkInActorFieldHits.set(returnedBy.sourceField, (checkInActorFieldHits.get(returnedBy.sourceField) ?? 0) + 1);
       } else if (sampleReturnedLoanKeys.size < 80) {
         for (const key of collectInterestingKeys(loan)) sampleReturnedLoanKeys.add(key);
       }
-      const staffKey = returnedBy?.key ?? "__unknown_reftab_user";
-      const identity = loanUsageIdentity(loan, staffKey);
-      if (identity && seenLoans.has(identity)) continue;
-      if (identity) seenLoans.add(identity);
+      const identity = loanUsageIdentity(loan, returnedBy?.key ?? "__unknown_reftab_return_user");
+      if (identity && seenCheckInLoans.has(identity)) continue;
+      if (identity) seenCheckInLoans.add(identity);
 
       const itemCount = loanItemCount(loan);
       checkedInLoans++;
       totalCheckedIn += itemCount;
       if (!returnedBy) missingReturnedByCount += itemCount;
 
-      const row = byStaff.get(staffKey) ?? {
-        staffKey,
-        displayName: returnedBy?.displayName ?? "Unknown Reftab user",
-        email: returnedBy?.email ?? "",
-        checkedInCount: 0,
-        percentOfTotal: 0,
-      };
-      row.checkedInCount += itemCount;
-      byStaff.set(staffKey, row);
+      rowForActor(returnedBy, "__unknown_reftab_return_user").checkedInCount += itemCount;
     }
   }
 
   const rows = Array.from(byStaff.values())
     .map((row) => ({
       ...row,
-      percentOfTotal: totalCheckedIn > 0 ? Number(((row.checkedInCount / totalCheckedIn) * 100).toFixed(1)) : 0,
+      percentOfCheckIns: totalCheckedIn > 0 ? Number(((row.checkedInCount / totalCheckedIn) * 100).toFixed(1)) : 0,
+      percentOfCheckOuts: totalCheckedOut > 0 ? Number(((row.checkedOutCount / totalCheckedOut) * 100).toFixed(1)) : 0,
     }))
-    .sort((a, b) => b.checkedInCount - a.checkedInCount || a.displayName.localeCompare(b.displayName));
+    .sort((a, b) => (b.checkedInCount + b.checkedOutCount) - (a.checkedInCount + a.checkedOutCount) || a.displayName.localeCompare(b.displayName));
 
   return {
     rows,
     totals: {
-      staffCount: rows.filter((row) => row.staffKey !== "__unknown_reftab_user").length,
+      staffCount: rows.filter((row) => !row.staffKey.startsWith("__unknown_reftab_")).length,
       totalCheckedIn,
+      totalCheckedOut,
       unknownStaffCheckInCount: missingReturnedByCount,
+      unknownStaffCheckOutCount: missingCheckedOutByCount,
     },
     source: {
       endpoints: REF_TAB_USAGE_LOANS_ENDPOINTS,
       fetchedLoans,
       checkedInLoans,
+      checkedOutLoans,
       missingReturnedByCount,
-      actorFieldHits: Object.fromEntries(Array.from(actorFieldHits.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))),
+      missingCheckedOutByCount,
+      checkInActorFieldHits: Object.fromEntries(Array.from(checkInActorFieldHits.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))),
+      checkOutActorFieldHits: Object.fromEntries(Array.from(checkOutActorFieldHits.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))),
       sampleReturnedLoanKeys: Array.from(sampleReturnedLoanKeys).sort((a, b) => a.localeCompare(b)).slice(0, 80),
+      sampleCheckedOutLoanKeys: Array.from(sampleCheckedOutLoanKeys).sort((a, b) => a.localeCompare(b)).slice(0, 80),
     },
   };
 }
