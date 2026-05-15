@@ -3,7 +3,7 @@ import { z } from "zod";
 import { isCurrentUserAdmin } from "@/lib/admin-auth";
 import { prisma } from "@/lib/db";
 import { getMissingReftabAssetRow, getOwnerReconciliationResult, getOwnerReconciliationRow } from "@/lib/owner-reconciliation";
-import { createAndAssignReftabAsset, reconcileReftabAssetOwner } from "@/lib/ref-tab";
+import { createAndAssignReftabAsset, fetchReftabCategories, reconcileReftabAssetOwner } from "@/lib/ref-tab";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +14,7 @@ const approveSchema = z.object({
   serial: z.string().nullable().optional(),
   model: z.string().nullable().optional(),
   title: z.string().nullable().optional(),
+  categoryId: z.string().min(1).optional(),
   ownerEmployeeId: z.string().min(1).optional(),
   ownerEmail: z.string().email().optional(),
 });
@@ -24,6 +25,11 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    if (req.nextUrl.searchParams.get("categories") === "1") {
+      const categories = await fetchReftabCategories();
+      return NextResponse.json({ categories });
+    }
+
     const result = await getOwnerReconciliationResult();
     return NextResponse.json({ ...result, count: result.rows.length });
   } catch (e) {
@@ -82,6 +88,7 @@ export async function POST(req: NextRequest) {
         serial: row.serial,
         model: row.model,
         title: row.title,
+        categoryId: parsed.data.categoryId,
         newOwnerEmployeeId: row.ninjaOwner.employeeId,
         newOwnerEmail: row.ninjaOwner.email,
         newOwnerName: row.ninjaOwner.displayName,

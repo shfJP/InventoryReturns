@@ -52,6 +52,11 @@ type MissingReftabAssetRow = {
   identityReason: string;
 };
 
+type CategoryOption = {
+  categoryId: string;
+  name: string;
+};
+
 type ApiResponse = {
   rows: OwnerReconciliationRow[];
   missingReftabRows: MissingReftabAssetRow[];
@@ -125,6 +130,13 @@ async function postJsonWithTimeout(body: Record<string, unknown>) {
   }
 }
 
+async function fetchReftabCategories(): Promise<CategoryOption[]> {
+  const res = await fetch("/api/admin/owner-reconciliation?categories=1");
+  const data = await readResponseJson(res);
+  if (!res.ok) throw new Error(responseErrorMessage(data, "Failed to load Reftab categories"));
+  return Array.isArray(data.categories) ? data.categories as CategoryOption[] : [];
+}
+
 function ownerStatusLabel(status: MissingReftabAssetRow["ownerStatus"]) {
   return {
     active: "Active Entra owner",
@@ -144,6 +156,10 @@ export default function OwnerReconciliationPage() {
   const [query, setQuery] = useState("");
   const [summary, setSummary] = useState<ApiResponse["summary"] | null>(null);
   const [missingReftabRows, setMissingReftabRows] = useState<MissingReftabAssetRow[]>([]);
+  const [categoryModalRow, setCategoryModalRow] = useState<MissingReftabAssetRow | null>(null);
+  const [categories, setCategories] = useState<CategoryOption[]>([]);
+  const [categoryLoading, setCategoryLoading] = useState(false);
+  const [selectedCategoryId, setSelectedCategoryId] = useState("");
 
   useEffect(() => {
     if (!isLoggedIn()) {
@@ -233,10 +249,9 @@ export default function OwnerReconciliationPage() {
     }
   }
 
-  async function addMissing(row: MissingReftabAssetRow) {
-    if (!row.ninjaOwner?.isActive) return;
-    const confirmed = window.confirm(`Add ${row.assetTag} to Reftab and assign it to ${ownerLabel(row.ninjaOwner, row.ninjaOwner.employeeId)}?`);
-    if (!confirmed) return;
+  async function submitMissing(row: MissingReftabAssetRow, categoryId?: string) {
+    const owner = row.ninjaOwner;
+    if (!owner?.isActive) return;
 
     setApprovingId(row.id);
     setError(null);
@@ -249,8 +264,9 @@ export default function OwnerReconciliationPage() {
         serial: row.serial,
         model: row.model,
         title: row.title,
-        ownerEmployeeId: row.ninjaOwner.employeeId,
-        ownerEmail: row.ninjaOwner.email,
+        categoryId,
+        ownerEmployeeId: owner.employeeId,
+        ownerEmail: owner.email,
       });
       if (!res.ok) throw new Error(responseErrorMessage(data, "Failed to add Reftab asset"));
       setMissingReftabRows((prev) => prev.filter((item) => item.id !== row.id));
@@ -259,12 +275,42 @@ export default function OwnerReconciliationPage() {
         missingReftabCount: Math.max(0, prev.missingReftabCount - 1),
         equipmentCount: prev.equipmentCount + 1,
       } : prev);
-      setMessage(`${row.assetTag} added to Reftab for ${row.ninjaOwner.displayName}.`);
+      setMessage(`${row.assetTag} added to Reftab for ${owner.displayName}.`);
+      setCategoryModalRow(null);
+      setSelectedCategoryId("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to add Reftab asset");
+      const message = e instanceof Error ? e.message : "Failed to add Reftab asset";
+      if (!categoryId && message.includes("Could not determine a Reftab category id")) {
+        setError(null);
+        setCategoryModalRow(row);
+        setCategoryLoading(true);
+        try {
+          const fetchedCategories = await fetchReftabCategories();
+          setCategories(fetchedCategories);
+          setSelectedCategoryId(fetchedCategories[0]?.categoryId ?? "");
+        } catch (categoryError) {
+          setError(categoryError instanceof Error ? categoryError.message : "Failed to load Reftab categories");
+        } finally {
+          setCategoryLoading(false);
+        }
+      } else {
+        setError(message);
+      }
     } finally {
       setApprovingId(null);
     }
+  }
+
+  async function addMissing(row: MissingReftabAssetRow) {
+    if (!row.ninjaOwner?.isActive) return;
+    const confirmed = window.confirm(`Add ${row.assetTag} to Reftab and assign it to ${ownerLabel(row.ninjaOwner, row.ninjaOwner.employeeId)}?`);
+    if (!confirmed) return;
+    await submitMissing(row);
+  }
+
+  async function submitCategoryModal() {
+    if (!categoryModalRow || !selectedCategoryId) return;
+    await submitMissing(categoryModalRow, selectedCategoryId);
   }
 
   if (loading) return <div className="text-[var(--muted)]">Loading...</div>;
@@ -436,6 +482,61 @@ export default function OwnerReconciliationPage() {
           <p className="py-12 text-center text-[var(--muted)]">No NinjaOne-only equipment found.</p>
         )}
       </section>
+
+      {categoryModalRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-lg bg-white shadow-xl">
+            <div className="border-b border-[var(--border)] px-5 py-4">
+              <h2 className="text-lg font-semibold text-[var(--text)]">Select Reftab Category</h2>
+              <p className="mt-1 text-sm text-[var(--muted)]">
+                {categoryModalRow.assetTag} needs a category before it can be created in Reftab.
+              </p>
+            </div>
+            <div className="space-y-4 px-5 py-4">
+              <div>
+                <label htmlFor="reftab-category" className="mb-2 block text-sm font-medium text-[var(--text)]">Category</label>
+                <select
+                  id="reftab-category"
+                  value={selectedCategoryId}
+                  onChange={(event) => setSelectedCategoryId(event.target.value)}
+                  disabled={categoryLoading || categories.length === 0}
+                  className="w-full rounded-lg border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--text)]"
+                >
+                  {categories.map((category) => (
+                    <option key={category.categoryId} value={category.categoryId}>
+                      {category.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {categoryLoading && <p className="text-sm text-[var(--muted)]">Loading Reftab categories...</p>}
+              {!categoryLoading && categories.length === 0 && (
+                <p className="text-sm text-red-700">No Reftab categories were returned.</p>
+              )}
+            </div>
+            <div className="flex justify-end gap-3 border-t border-[var(--border)] px-5 py-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setCategoryModalRow(null);
+                  setSelectedCategoryId("");
+                }}
+                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--text)] hover:bg-[var(--table-header-bg)]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitCategoryModal}
+                disabled={categoryLoading || !selectedCategoryId || approvingId === categoryModalRow.id}
+                className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-50"
+              >
+                {approvingId === categoryModalRow.id ? "Adding" : "Create Asset"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

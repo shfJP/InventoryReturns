@@ -1167,6 +1167,7 @@ export type ReftabCreateAndAssignInput = {
   serial?: string | null;
   title?: string | null;
   model?: string | null;
+  categoryId?: string | null;
   newOwnerEmployeeId: string;
   newOwnerEmail: string;
   newOwnerName?: string;
@@ -1246,7 +1247,7 @@ function categoryFromRecord(record: Record<string, unknown>): { categoryId: stri
   return { categoryId, name };
 }
 
-async function fetchReftabCategories(): Promise<Array<{ categoryId: string; name: string }>> {
+export async function fetchReftabCategories(): Promise<Array<{ categoryId: string; name: string }>> {
   const limit = 500;
   let offset = 0;
   const categories: Array<{ categoryId: string; name: string }> = [];
@@ -1283,6 +1284,8 @@ async function inferCreateAssetCategoryIdFromReftab(input: ReftabCreateAndAssign
 }
 
 async function inferCreateAssetCategoryId(input: ReftabCreateAndAssignInput): Promise<string | undefined> {
+  if (input.categoryId) return input.categoryId;
+
   const explicitCategoryId = explicitCreateAssetCategoryId(input);
   if (explicitCategoryId) return explicitCategoryId;
 
