@@ -182,6 +182,7 @@ export default function Sidebar() {
               />
               <AdminLink href="/admin/asset-values" label="Asset Values" active={pathname === "/admin/asset-values"} />
               <AdminLink href="/admin/owner-reconciliation" label="Owner Reconcile" active={pathname === "/admin/owner-reconciliation"} />
+              <AdminLink href="/admin/reftab-usage" label="Reftab Usage" active={pathname === "/admin/reftab-usage"} />
             </>
           )}
         </nav>
