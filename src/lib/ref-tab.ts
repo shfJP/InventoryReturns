@@ -62,7 +62,7 @@ type ReftabLoanee = {
 };
 
 type ReftabCheckoutRef = {
-  field: "lnid" | "uid";
+  field: "lnid" | "loan_uid";
   value: string;
 };
 
@@ -955,7 +955,7 @@ function loaneeCheckoutRef(loanee: ReftabLoanee | null | undefined): ReftabCheck
   const lnid = valueToString(loanee?.lnid);
   if (lnid) return { field: "lnid", value: lnid };
   const uid = valueToString(loanee?.uid);
-  if (uid) return { field: "uid", value: uid };
+  if (uid) return { field: "loan_uid", value: uid };
   return undefined;
 }
 
@@ -1067,7 +1067,7 @@ async function checkoutRefForUser(user: { employeeId: string; email: string; dis
 
   if (!REF_TAB_CREATE_MISSING_LOANEES) {
     throw new Error(
-      `Could not find a Reftab checkout id (lnid or subuser uid) for ${user.email || user.employeeId}. Verify the user's email exists in the /loanees response.`
+      `Could not find a Reftab checkout id (lnid or subuser loan_uid) for ${user.email || user.employeeId}. Verify the user's email exists in the /loanees response.`
     );
   }
 
@@ -1095,7 +1095,7 @@ async function checkoutRefForUser(user: { employeeId: string; email: string; dis
     return refreshedCheckoutRef;
   }
 
-  throw new Error(`Could not find or create a Reftab checkout id (lnid or subuser uid) for ${user.email || user.employeeId}.`);
+  throw new Error(`Could not find or create a Reftab checkout id (lnid or subuser loan_uid) for ${user.email || user.employeeId}.`);
 }
 
 function checkoutBody(ref: ReftabCheckoutRef, aid: string, note: string): Record<string, unknown> {
