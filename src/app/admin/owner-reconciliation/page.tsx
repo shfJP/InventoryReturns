@@ -85,7 +85,11 @@ function deviceLabel(row: { ninjaDevice: OwnerReconciliationRow["ninjaDevice"] }
 
 function formatDate(value: string | null) {
   if (!value) return "-";
-  const date = new Date(value);
+  const trimmed = value.trim();
+  const numeric = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
+  const date = Number.isFinite(numeric)
+    ? new Date(numeric < 10_000_000_000 ? numeric * 1000 : numeric)
+    : new Date(trimmed);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
 }
