@@ -111,6 +111,7 @@ export type ReftabCheckInUsageRow = {
   checkedOutCount: number;
   percentOfCheckIns: number;
   percentOfCheckOuts: number;
+  utilizationScore: number;
 };
 
 export type ReftabCheckInUsageResult = {
@@ -2233,6 +2234,7 @@ export async function fetchReftabCheckInUsage(): Promise<ReftabCheckInUsageResul
       checkedOutCount: 0,
       percentOfCheckIns: 0,
       percentOfCheckOuts: 0,
+      utilizationScore: 0,
     };
     byStaff.set(staffKey, row);
     return row;
@@ -2290,7 +2292,11 @@ export async function fetchReftabCheckInUsage(): Promise<ReftabCheckInUsageResul
       percentOfCheckIns: totalCheckedIn > 0 ? Number(((row.checkedInCount / totalCheckedIn) * 100).toFixed(1)) : 0,
       percentOfCheckOuts: totalCheckedOut > 0 ? Number(((row.checkedOutCount / totalCheckedOut) * 100).toFixed(1)) : 0,
     }))
-    .sort((a, b) => (b.checkedInCount + b.checkedOutCount) - (a.checkedInCount + a.checkedOutCount) || a.displayName.localeCompare(b.displayName));
+    .map((row) => ({
+      ...row,
+      utilizationScore: Number(((row.percentOfCheckIns + row.percentOfCheckOuts) / 2).toFixed(1)),
+    }))
+    .sort((a, b) => b.utilizationScore - a.utilizationScore || (b.checkedInCount + b.checkedOutCount) - (a.checkedInCount + a.checkedOutCount) || a.displayName.localeCompare(b.displayName));
 
   return {
     rows,

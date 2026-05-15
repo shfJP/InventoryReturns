@@ -15,6 +15,7 @@ type StaffUsageRow = {
   checkedOutCount: number;
   percentOfCheckIns: number;
   percentOfCheckOuts: number;
+  utilizationScore: number;
 };
 
 type UsageResponse = {
@@ -79,6 +80,7 @@ export default function ReftabUsagePage() {
       { header: "Checked-In Percent", value: (row) => `${row.percentOfCheckIns}%` },
       { header: "Checked-Out Items", value: (row) => row.checkedOutCount },
       { header: "Checked-Out Percent", value: (row) => `${row.percentOfCheckOuts}%` },
+      { header: "Utilization Score", value: (row) => row.utilizationScore },
     ], filteredRows);
   }
 
@@ -135,6 +137,7 @@ export default function ReftabUsagePage() {
                 <thead>
                   <tr>
                     <th className="table-header">Staff</th>
+                    <th className="table-header">Utilization Score</th>
                     <th className="table-header">Checked-In Items</th>
                     <th className="table-header">Checked-In %</th>
                     <th className="table-header">Checked-Out Items</th>
@@ -147,6 +150,9 @@ export default function ReftabUsagePage() {
                       <td className="table-cell">
                         <div className="font-medium text-[var(--text)]">{formatPersonName(row.displayName)}</div>
                         <div className="text-xs text-[var(--muted)]">{row.email || "No actor email in Reftab"}</div>
+                      </td>
+                      <td className="table-cell">
+                        <span className="rounded bg-[var(--accent)]/10 px-2 py-1 font-semibold text-[var(--accent)]">{row.utilizationScore}</span>
                       </td>
                       <td className="table-cell text-[var(--text)]">{row.checkedInCount}</td>
                       <td className="table-cell">
