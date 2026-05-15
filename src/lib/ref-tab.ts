@@ -24,7 +24,8 @@ const REF_TAB_CHECKIN_ENDPOINT_TEMPLATE = (process.env.REF_TAB_CHECKIN_ENDPOINT_
 const REF_TAB_CHECKOUT_ENDPOINT = (process.env.REF_TAB_CHECKOUT_ENDPOINT ?? "loans").trim();
 const REF_TAB_CREATE_ASSET_ENDPOINT = (process.env.REF_TAB_CREATE_ASSET_ENDPOINT ?? "assets").trim();
 const REF_TAB_CREATE_LOANEE_ENDPOINT = (process.env.REF_TAB_CREATE_LOANEE_ENDPOINT ?? "loanees").trim();
-const REF_TAB_LOANEE_LOOKUP_ENDPOINTS = (process.env.REF_TAB_LOANEE_LOOKUP_ENDPOINTS ?? "loanees?email={email},loanees?search={email},loanees?q={email}")
+const REF_TAB_CREATE_MISSING_LOANEES = (process.env.REF_TAB_CREATE_MISSING_LOANEES ?? "false").trim().toLowerCase() === "true";
+const REF_TAB_LOANEE_LOOKUP_ENDPOINTS = (process.env.REF_TAB_LOANEE_LOOKUP_ENDPOINTS ?? "loanees?email={email},loanees?search={email},loanees?q={email},loanees?uid={employeeId},loanees?search={employeeId},loanees?q={employeeId},users?email={email},users?search={email},users?q={email}")
   .split(",")
   .map((endpoint) => endpoint.trim())
   .filter(Boolean);
@@ -160,6 +161,32 @@ function valueToString(value: unknown): string | undefined {
   if (typeof value === "string") return value.trim() || undefined;
   if (typeof value === "number") return String(value);
   return undefined;
+}
+
+function collectRecords(value: unknown, out: Record<string, unknown>[] = []): Record<string, unknown>[] {
+  if (value == null) return out;
+  if (Array.isArray(value)) {
+    for (const item of value) collectRecords(item, out);
+    return out;
+  }
+  if (typeof value !== "object") return out;
+  const record = value as Record<string, unknown>;
+  out.push(record);
+  for (const nested of Object.values(record)) {
+    if (nested != null && typeof nested === "object") collectRecords(nested, out);
+  }
+  return out;
+}
+
+function recordContainsNormalizedValue(record: Record<string, unknown>, target: string | null): boolean {
+  if (!target) return false;
+  return Object.values(record).some((value) => {
+    if (typeof value === "string" || typeof value === "number") return normalizeKey(String(value)) === target;
+    if (Array.isArray(value)) {
+      return value.some((item) => (typeof item === "string" || typeof item === "number") && normalizeKey(String(item)) === target);
+    }
+    return false;
+  });
 }
 
 function firstString(obj: Record<string, unknown>, paths: string[]): string | undefined {
@@ -415,13 +442,23 @@ function assetDetails(record: Record<string, unknown>): {
 function listFromResponse(data: unknown): Record<string, unknown>[] {
   if (Array.isArray(data)) {
     if (data.length > 0 && Array.isArray(data[0])) {
-      return (data[0] as unknown[]).filter((item): item is Record<string, unknown> => item != null && typeof item === "object" && !Array.isArray(item));
+      return data
+        .flatMap((group) => Array.isArray(group) ? group : [group])
+        .filter((item): item is Record<string, unknown> => item != null && typeof item === "object" && !Array.isArray(item));
     }
     return data.filter((item): item is Record<string, unknown> => item != null && typeof item === "object" && !Array.isArray(item));
   }
   if (data != null && typeof data === "object") {
     const record = data as Record<string, unknown>;
-    for (const key of ["data", "items", "results", "loans", "assets", "loanees", "categories"]) {
+    const nestedItems = ["data", "items", "results", "loans", "assets", "loanees", "subusers", "subUsers", "users", "categories"]
+      .flatMap((key) => {
+        const value = record[key];
+        return Array.isArray(value) ? value : [];
+      })
+      .filter((item): item is Record<string, unknown> => item != null && typeof item === "object" && !Array.isArray(item));
+    if (nestedItems.length > 0) return nestedItems;
+
+    for (const key of ["data", "items", "results", "loans", "assets", "loanees", "subusers", "subUsers", "users", "categories"]) {
       const value = record[key];
       if (Array.isArray(value)) {
         return value.filter((item): item is Record<string, unknown> => item != null && typeof item === "object" && !Array.isArray(item));
@@ -874,12 +911,12 @@ function loaneeMatches(loanee: ReftabLoanee, user: { employeeId: string; email: 
 
 function loaneeWithIdFromResponse(data: unknown, user: { employeeId: string; email: string }): ReftabLoanee | null {
   if (data == null) return null;
-  const records = listFromResponse(data);
-  const candidates = records.length > 0
-    ? records.map(loaneeFromApiRecord)
-    : data != null && typeof data === "object" && !Array.isArray(data)
-      ? [loaneeFromApiRecord(data as Record<string, unknown>)]
-      : [];
+  const email = normalizeKey(user.email);
+  const employeeId = normalizeKey(user.employeeId);
+  const listedRecords = listFromResponse(data);
+  const records = listedRecords.length > 0 ? listedRecords : collectRecords(data);
+  const matchingRecords = records.filter((record) => recordContainsNormalizedValue(record, email) || recordContainsNormalizedValue(record, employeeId));
+  const candidates = (matchingRecords.length > 0 ? matchingRecords : records).map(loaneeFromApiRecord);
   return candidates.find((loanee) => loaneeMatches(loanee, user) && valueToString(loanee.lnid)) ?? null;
 }
 
@@ -907,6 +944,7 @@ async function lookupLoaneeForUser(user: { employeeId: string; email: string }):
 async function createReftabLoanee(user: { employeeId: string; email: string; displayName?: string }): Promise<ReftabLoanee> {
   const name = user.displayName?.trim() || user.email || user.employeeId;
   const created = await sendReftabJson(REF_TAB_CREATE_LOANEE_ENDPOINT, "POST", `Reftab create loanee ${user.email || user.employeeId}`, {
+    title: name,
     name,
     email: user.email,
     uid: user.employeeId,
@@ -925,6 +963,12 @@ async function checkoutLoaneeIdForUser(user: { employeeId: string; email: string
   const lookedUpLoanee = await lookupLoaneeForUser(user);
   const lookedUpLnid = valueToString(lookedUpLoanee?.lnid);
   if (lookedUpLnid) return lookedUpLnid;
+
+  if (!REF_TAB_CREATE_MISSING_LOANEES) {
+    throw new Error(
+      `Could not find a Reftab loanee id (lnid) for ${user.email || user.employeeId}. Verify the user exists in Reftab and set REF_TAB_LOANEE_LOOKUP_ENDPOINTS to the tenant's loanee search endpoint if needed.`
+    );
+  }
 
   const createdLoanee = await createReftabLoanee(user);
   const createdLnid = valueToString(createdLoanee.lnid);
