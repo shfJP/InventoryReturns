@@ -61,6 +61,11 @@ type ReftabLoanee = {
   managerEmail?: string;
 };
 
+type ReftabCheckoutRef = {
+  field: "lnid" | "uid";
+  value: string;
+};
+
 type LoaneeMaps = {
   lnidToEmail: Map<string, string>;
   uidToEmail: Map<string, string>;
@@ -496,12 +501,29 @@ async function fetchOptionalReftabJson(endpoint: string, label: string): Promise
     label
   );
   if (res.status === 400 || res.status === 404 || res.status === 405) {
+    console.info(`[reftab] Optional lookup skipped: label="${label}" endpoint="${cleanEndpoint}" status=${res.status}.`);
     return null;
   }
   if (!res.ok) {
     throw new Error(`${label} returned ${res.status}: ${await res.text()}`);
   }
   return res.json();
+}
+
+function safeLogBody(body: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!body) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(body)) {
+    const normalized = key.toLowerCase();
+    out[key] = normalized.includes("secret") || normalized.includes("token") || normalized.includes("password")
+      ? "[redacted]"
+      : value;
+  }
+  return out;
+}
+
+function truncateForLog(value: string, max = 2_000): string {
+  return value.length > max ? `${value.slice(0, max)}... [truncated ${value.length - max} char(s)]` : value;
 }
 
 async function sendReftabJson(endpoint: string, method: "POST" | "PUT" | "DELETE", label: string, body?: Record<string, unknown>): Promise<unknown> {
@@ -521,6 +543,14 @@ async function sendReftabJson(endpoint: string, method: "POST" | "PUT" | "DELETE
   );
   const text = await res.text();
   if (!res.ok) {
+    console.error("[reftab] Write request failed", {
+      label,
+      method,
+      endpoint: cleanEndpoint,
+      status: res.status,
+      requestBody: safeLogBody(body),
+      responseBody: truncateForLog(text),
+    });
     throw new Error(`${label} returned ${res.status}: ${text}`);
   }
   if (!text) return {};
@@ -918,11 +948,28 @@ function loaneeMatches(loanee: ReftabLoanee, user: { employeeId: string; email: 
   const loaneeEmail = normalizeKey(loanee.email);
   const loaneeEmployeeId = normalizeKey(valueToString(loanee.employeeId));
   if (email && loaneeEmail === email) return true;
-  return Boolean(loaneeCheckoutId(loanee) && employeeId && loaneeEmployeeId === employeeId);
+  return Boolean(loaneeCheckoutRef(loanee) && employeeId && loaneeEmployeeId === employeeId);
 }
 
-function loaneeCheckoutId(loanee: ReftabLoanee | null | undefined): string | undefined {
-  return valueToString(loanee?.lnid) ?? valueToString(loanee?.uid);
+function loaneeCheckoutRef(loanee: ReftabLoanee | null | undefined): ReftabCheckoutRef | undefined {
+  const lnid = valueToString(loanee?.lnid);
+  if (lnid) return { field: "lnid", value: lnid };
+  const uid = valueToString(loanee?.uid);
+  if (uid) return { field: "uid", value: uid };
+  return undefined;
+}
+
+function loaneeForLog(loanee: ReftabLoanee | null | undefined): Record<string, unknown> | null {
+  if (!loanee) return null;
+  const checkoutRef = loaneeCheckoutRef(loanee);
+  return {
+    email: loanee.email,
+    employeeId: valueToString(loanee.employeeId),
+    lnid: valueToString(loanee.lnid),
+    uid: valueToString(loanee.uid),
+    checkoutField: checkoutRef?.field,
+    checkoutValue: checkoutRef?.value,
+  };
 }
 
 function loaneeWithIdFromResponse(data: unknown, user: { employeeId: string; email: string }): ReftabLoanee | null {
@@ -933,13 +980,35 @@ function loaneeWithIdFromResponse(data: unknown, user: { employeeId: string; ema
   const records = listedRecords.length > 0 ? listedRecords : collectRecords(data);
   const matchingRecords = records.filter((record) => recordContainsNormalizedValue(record, email) || recordContainsNormalizedValue(record, employeeId));
   const candidates = (matchingRecords.length > 0 ? matchingRecords : records).map(loaneeFromApiRecord);
-  return candidates.find((loanee) => loaneeMatches(loanee, user) && loaneeCheckoutId(loanee)) ?? null;
+  const match = candidates.find((loanee) => loaneeMatches(loanee, user) && loaneeCheckoutRef(loanee)) ?? null;
+  console.info("[reftab] Optional loanee lookup scan", {
+    email: user.email,
+    employeeId: user.employeeId,
+    listedRecordCount: listedRecords.length,
+    scannedRecordCount: records.length,
+    matchingRecordCount: matchingRecords.length,
+    candidateCount: candidates.length,
+    selected: loaneeForLog(match),
+    sampleCandidates: candidates.slice(0, 3).map(loaneeForLog),
+  });
+  return match;
 }
 
 async function findLoaneeForUser(user: { employeeId: string; email: string }): Promise<ReftabLoanee | null> {
   const loanees = await fetchAllReftabLoanees();
   const matches = loanees.filter((loanee) => loaneeMatches(loanee, user));
-  return matches.find((loanee) => loaneeCheckoutId(loanee)) ?? matches[0] ?? null;
+  const selected = matches.find((loanee) => loaneeCheckoutRef(loanee)) ?? matches[0] ?? null;
+  console.info("[reftab] /loanees match scan", {
+    email: user.email,
+    normalizedEmail: normalizeKey(user.email),
+    employeeId: user.employeeId,
+    fetchedCount: loanees.length,
+    matchCount: matches.length,
+    checkoutableMatchCount: matches.filter((loanee) => loaneeCheckoutRef(loanee)).length,
+    selected: loaneeForLog(selected),
+    sampleMatches: matches.slice(0, 5).map(loaneeForLog),
+  });
+  return selected;
 }
 
 async function lookupLoaneeForUser(user: { employeeId: string; email: string }): Promise<ReftabLoanee | null> {
@@ -971,14 +1040,30 @@ async function createReftabLoanee(user: { employeeId: string; email: string; dis
   return {};
 }
 
-async function checkoutLoaneeIdForUser(user: { employeeId: string; email: string; displayName?: string }): Promise<string> {
+async function checkoutRefForUser(user: { employeeId: string; email: string; displayName?: string }): Promise<ReftabCheckoutRef> {
   const existingLoanee = await findLoaneeForUser(user);
-  const existingCheckoutId = loaneeCheckoutId(existingLoanee);
-  if (existingCheckoutId) return existingCheckoutId;
+  const existingCheckoutRef = loaneeCheckoutRef(existingLoanee);
+  if (existingCheckoutRef) {
+    console.info("[reftab] Selected checkout ref from /loanees", {
+      email: user.email,
+      checkoutField: existingCheckoutRef.field,
+      checkoutValue: existingCheckoutRef.value,
+      loanee: loaneeForLog(existingLoanee),
+    });
+    return existingCheckoutRef;
+  }
 
   const lookedUpLoanee = await lookupLoaneeForUser(user);
-  const lookedUpCheckoutId = loaneeCheckoutId(lookedUpLoanee);
-  if (lookedUpCheckoutId) return lookedUpCheckoutId;
+  const lookedUpCheckoutRef = loaneeCheckoutRef(lookedUpLoanee);
+  if (lookedUpCheckoutRef) {
+    console.info("[reftab] Selected checkout ref from optional lookup", {
+      email: user.email,
+      checkoutField: lookedUpCheckoutRef.field,
+      checkoutValue: lookedUpCheckoutRef.value,
+      loanee: loaneeForLog(lookedUpLoanee),
+    });
+    return lookedUpCheckoutRef;
+  }
 
   if (!REF_TAB_CREATE_MISSING_LOANEES) {
     throw new Error(
@@ -987,14 +1072,50 @@ async function checkoutLoaneeIdForUser(user: { employeeId: string; email: string
   }
 
   const createdLoanee = await createReftabLoanee(user);
-  const createdCheckoutId = loaneeCheckoutId(createdLoanee);
-  if (createdCheckoutId) return createdCheckoutId;
+  const createdCheckoutRef = loaneeCheckoutRef(createdLoanee);
+  if (createdCheckoutRef) {
+    console.info("[reftab] Selected checkout ref from created loanee", {
+      email: user.email,
+      checkoutField: createdCheckoutRef.field,
+      checkoutValue: createdCheckoutRef.value,
+      loanee: loaneeForLog(createdLoanee),
+    });
+    return createdCheckoutRef;
+  }
 
   const refreshedLoanee = await findLoaneeForUser(user);
-  const refreshedCheckoutId = loaneeCheckoutId(refreshedLoanee);
-  if (refreshedCheckoutId) return refreshedCheckoutId;
+  const refreshedCheckoutRef = loaneeCheckoutRef(refreshedLoanee);
+  if (refreshedCheckoutRef) {
+    console.info("[reftab] Selected checkout ref after loanee refresh", {
+      email: user.email,
+      checkoutField: refreshedCheckoutRef.field,
+      checkoutValue: refreshedCheckoutRef.value,
+      loanee: loaneeForLog(refreshedLoanee),
+    });
+    return refreshedCheckoutRef;
+  }
 
   throw new Error(`Could not find or create a Reftab checkout id (lnid or subuser uid) for ${user.email || user.employeeId}.`);
+}
+
+function checkoutBody(ref: ReftabCheckoutRef, aid: string, note: string): Record<string, unknown> {
+  return {
+    [ref.field]: numericRequiredId(ref.value, `Reftab checkout ${ref.field}`),
+    aids: [aid],
+    notes: note,
+  };
+}
+
+async function checkoutReftabAsset(assetTag: string, aid: string, checkoutRef: ReftabCheckoutRef, note: string): Promise<void> {
+  const body = checkoutBody(checkoutRef, aid, note);
+  console.info("[reftab] Checking out asset", {
+    assetTag,
+    aid,
+    checkoutField: checkoutRef.field,
+    checkoutValue: checkoutRef.value,
+    requestBody: safeLogBody(body),
+  });
+  await sendReftabJson(REF_TAB_CHECKOUT_ENDPOINT, "POST", `Reftab check-out asset ${assetTag}`, body);
 }
 
 function checkinEndpoint(loanId: string): string {
@@ -1027,8 +1148,7 @@ export async function reconcileReftabAssetOwner(input: ReftabOwnerReconciliation
     throw new Error(`Could not find an active Reftab loan for asset ${input.assetTag}. Run Reftab sync and try again.`);
   }
 
-  const loaneeId = await checkoutLoaneeIdForUser({ employeeId: input.newOwnerEmployeeId, email: input.newOwnerEmail, displayName: input.newOwnerName });
-  const checkoutLoaneeId = numericRequiredId(loaneeId, "Reftab checkout id");
+  const checkoutRef = await checkoutRefForUser({ employeeId: input.newOwnerEmployeeId, email: input.newOwnerEmail, displayName: input.newOwnerName });
 
   const aid = input.aid ?? currentLoan.assignment.aid ?? input.assetTag;
   const note = input.note ?? `Owner reconciliation approved from NinjaOne for ${input.assetTag}.`;
@@ -1036,13 +1156,9 @@ export async function reconcileReftabAssetOwner(input: ReftabOwnerReconciliation
     aids: [aid],
     notes: note,
   });
-  await sendReftabJson(REF_TAB_CHECKOUT_ENDPOINT, "POST", `Reftab check-out asset ${input.assetTag}`, {
-    lnid: checkoutLoaneeId,
-    aids: [aid],
-    notes: note,
-  });
+  await checkoutReftabAsset(input.assetTag, aid, checkoutRef, note);
 
-  return { loanId: currentLoan.loanId, loaneeId };
+  return { loanId: currentLoan.loanId, loaneeId: checkoutRef.value };
 }
 
 export type ReftabCreateAndAssignInput = {
@@ -1231,8 +1347,7 @@ async function inferCreateAssetLocationId(input: ReftabCreateAndAssignInput): Pr
 }
 
 export async function createAndAssignReftabAsset(input: ReftabCreateAndAssignInput): Promise<{ aid: string; loaneeId: string }> {
-  const loaneeId = await checkoutLoaneeIdForUser({ employeeId: input.newOwnerEmployeeId, email: input.newOwnerEmail, displayName: input.newOwnerName });
-  const checkoutLoaneeId = numericRequiredId(loaneeId, "Reftab checkout id");
+  const checkoutRef = await checkoutRefForUser({ employeeId: input.newOwnerEmployeeId, email: input.newOwnerEmail, displayName: input.newOwnerName });
 
   const note = input.note ?? `Created from NinjaOne reconciliation for ${input.assetTag}.`;
   const createBody: Record<string, unknown> = {
@@ -1256,13 +1371,9 @@ export async function createAndAssignReftabAsset(input: ReftabCreateAndAssignInp
 
   const created = await sendReftabJson(REF_TAB_CREATE_ASSET_ENDPOINT, "POST", `Reftab create asset ${input.assetTag}`, createBody);
   const aid = createdAssetIdFromResponse(created) ?? input.assetTag;
-  await sendReftabJson(REF_TAB_CHECKOUT_ENDPOINT, "POST", `Reftab check-out asset ${input.assetTag}`, {
-    lnid: checkoutLoaneeId,
-    aids: [aid],
-    notes: note,
-  });
+  await checkoutReftabAsset(input.assetTag, aid, checkoutRef, note);
 
-  return { aid, loaneeId };
+  return { aid, loaneeId: checkoutRef.value };
 }
 
 /**
