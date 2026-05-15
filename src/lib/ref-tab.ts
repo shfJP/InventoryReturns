@@ -1369,6 +1369,15 @@ function isExcludedUsageActor(actor: ReftabUsageActor | null): boolean {
     .some((value) => value && REF_TAB_USAGE_EXCLUDED_ACTORS.has(value));
 }
 
+function resolveActiveUsageActor(actor: ReftabUsageActor | null, aliases: Map<string, UserAlias>): UserAlias | null {
+  if (isExcludedUsageActor(actor)) return null;
+  if (!actor) return null;
+  const user = [actor.email, actor.key]
+    .map((value) => aliases.get(normalizeKey(value) ?? ""))
+    .find((match): match is UserAlias => Boolean(match));
+  return user?.isActive ? user : null;
+}
+
 function actorFromLoan(
   loan: Record<string, unknown>,
   objectPaths: string[],
@@ -2212,13 +2221,14 @@ export async function fetchReftabCheckInUsage(): Promise<ReftabCheckInUsageResul
   const checkOutActorFieldHits = new Map<string, number>();
   const sampleReturnedLoanKeys = new Set<string>();
   const sampleCheckedOutLoanKeys = new Set<string>();
+  const userAliases = await buildUserAliasMap();
 
-  function rowForActor(actor: ReftabUsageActor | null, unknownLabel: string): ReftabCheckInUsageRow {
-    const staffKey = actor?.key ?? unknownLabel;
+  function rowForUser(user: UserAlias): ReftabCheckInUsageRow {
+    const staffKey = user.employeeId;
     const row = byStaff.get(staffKey) ?? {
       staffKey,
-      displayName: actor?.displayName ?? "Unknown Reftab user",
-      email: actor?.email ?? "",
+      displayName: user.displayName,
+      email: user.email,
       checkedInCount: 0,
       checkedOutCount: 0,
       percentOfCheckIns: 0,
@@ -2234,43 +2244,43 @@ export async function fetchReftabCheckInUsage(): Promise<ReftabCheckInUsageResul
 
     for (const loan of loans) {
       const checkedOutBy = checkedOutByFromLoan(loan);
-      const checkOutIdentity = loanUsageIdentity(loan, checkedOutBy?.key ?? "__unknown_reftab_checkout_user");
-      if (checkOutIdentity && !seenCheckOutLoans.has(checkOutIdentity)) {
-        seenCheckOutLoans.add(checkOutIdentity);
-        if (isExcludedUsageActor(checkedOutBy)) continue;
-        const itemCount = loanItemCount(loan);
-        checkedOutLoans++;
-        totalCheckedOut += itemCount;
-        if (checkedOutBy) {
+      const activeCheckOutUser = resolveActiveUsageActor(checkedOutBy, userAliases);
+      if (checkedOutBy && activeCheckOutUser) {
+        const checkOutIdentity = loanUsageIdentity(loan, activeCheckOutUser.employeeId);
+        if (checkOutIdentity && !seenCheckOutLoans.has(checkOutIdentity)) {
+          seenCheckOutLoans.add(checkOutIdentity);
+          const itemCount = loanItemCount(loan);
+          checkedOutLoans++;
+          totalCheckedOut += itemCount;
           checkOutActorFieldHits.set(checkedOutBy.sourceField, (checkOutActorFieldHits.get(checkedOutBy.sourceField) ?? 0) + 1);
-        } else {
-          missingCheckedOutByCount += itemCount;
-          if (sampleCheckedOutLoanKeys.size < 80) {
-            for (const key of collectInterestingKeys(loan)) sampleCheckedOutLoanKeys.add(key);
-          }
+          rowForUser(activeCheckOutUser).checkedOutCount += itemCount;
         }
-        rowForActor(checkedOutBy, "__unknown_reftab_checkout_user").checkedOutCount += itemCount;
+      } else {
+        if (!checkedOutBy && sampleCheckedOutLoanKeys.size < 80) {
+          for (const key of collectInterestingKeys(loan)) sampleCheckedOutLoanKeys.add(key);
+        }
       }
 
       if (!isHistoricalCheckInLoan(loan)) continue;
 
       const returnedBy = returnedByFromLoan(loan);
-      if (returnedBy) {
-        checkInActorFieldHits.set(returnedBy.sourceField, (checkInActorFieldHits.get(returnedBy.sourceField) ?? 0) + 1);
-      } else if (sampleReturnedLoanKeys.size < 80) {
-        for (const key of collectInterestingKeys(loan)) sampleReturnedLoanKeys.add(key);
+      const activeReturnedByUser = resolveActiveUsageActor(returnedBy, userAliases);
+      if (!returnedBy || !activeReturnedByUser) {
+        if (!returnedBy && sampleReturnedLoanKeys.size < 80) {
+          for (const key of collectInterestingKeys(loan)) sampleReturnedLoanKeys.add(key);
+        }
+        continue;
       }
-      const identity = loanUsageIdentity(loan, returnedBy?.key ?? "__unknown_reftab_return_user");
+      const identity = loanUsageIdentity(loan, activeReturnedByUser.employeeId);
       if (identity && seenCheckInLoans.has(identity)) continue;
       if (identity) seenCheckInLoans.add(identity);
-      if (isExcludedUsageActor(returnedBy)) continue;
 
       const itemCount = loanItemCount(loan);
       checkedInLoans++;
       totalCheckedIn += itemCount;
-      if (!returnedBy) missingReturnedByCount += itemCount;
+      checkInActorFieldHits.set(returnedBy.sourceField, (checkInActorFieldHits.get(returnedBy.sourceField) ?? 0) + 1);
 
-      rowForActor(returnedBy, "__unknown_reftab_return_user").checkedInCount += itemCount;
+      rowForUser(activeReturnedByUser).checkedInCount += itemCount;
     }
   }
 
@@ -2285,7 +2295,7 @@ export async function fetchReftabCheckInUsage(): Promise<ReftabCheckInUsageResul
   return {
     rows,
     totals: {
-      staffCount: rows.filter((row) => !row.staffKey.startsWith("__unknown_reftab_")).length,
+      staffCount: rows.length,
       totalCheckedIn,
       totalCheckedOut,
       unknownStaffCheckInCount: missingReturnedByCount,
