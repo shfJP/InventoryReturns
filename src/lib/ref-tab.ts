@@ -25,7 +25,7 @@ const REF_TAB_CHECKOUT_ENDPOINT = (process.env.REF_TAB_CHECKOUT_ENDPOINT ?? "loa
 const REF_TAB_CREATE_ASSET_ENDPOINT = (process.env.REF_TAB_CREATE_ASSET_ENDPOINT ?? "assets").trim();
 const REF_TAB_CREATE_LOANEE_ENDPOINT = (process.env.REF_TAB_CREATE_LOANEE_ENDPOINT ?? "loanees").trim();
 const REF_TAB_CREATE_MISSING_LOANEES = (process.env.REF_TAB_CREATE_MISSING_LOANEES ?? "false").trim().toLowerCase() === "true";
-const REF_TAB_LOANEE_LOOKUP_ENDPOINTS = (process.env.REF_TAB_LOANEE_LOOKUP_ENDPOINTS ?? "loanees?email={email},loanees?search={email},loanees?q={email},loanees?uid={employeeId},loanees?search={employeeId},loanees?q={employeeId},users?email={email},users?search={email},users?q={email}")
+const REF_TAB_LOANEE_LOOKUP_ENDPOINTS = (process.env.REF_TAB_LOANEE_LOOKUP_ENDPOINTS ?? "loanees")
   .split(",")
   .map((endpoint) => endpoint.trim())
   .filter(Boolean);
@@ -494,7 +494,7 @@ async function fetchOptionalReftabJson(endpoint: string, label: string): Promise
     REF_TAB_TIMEOUT_MS,
     label
   );
-  if (res.status === 400 || res.status === 404) {
+  if (res.status === 400 || res.status === 404 || res.status === 405) {
     return null;
   }
   if (!res.ok) {
