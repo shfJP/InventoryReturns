@@ -105,7 +105,7 @@ export default function StaffDetailPage() {
       try {
         const [staffRes, eqRes] = await Promise.all([
           fetch("/api/staff"),
-          fetch(`/api/equipment?employee_id=${encodeURIComponent(employeeId)}`),
+          fetch(`/api/equipment?employee_id=${encodeURIComponent(employeeId)}&include_collected=true`),
         ]);
         if (!staffRes.ok) throw new Error("Unauthorized");
         const staffList = await staffRes.json();
