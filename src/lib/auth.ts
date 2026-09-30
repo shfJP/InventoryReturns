@@ -28,11 +28,20 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
     const user = await prisma.user.findFirst({
       where: {
         OR: [
-          { employeeId },
-          { upn: employeeId },
-          { email: employeeId },
+          { employeeId: { equals: employeeId, mode: "insensitive" } },
+          { upn: { equals: employeeId, mode: "insensitive" } },
+          { email: { equals: employeeId, mode: "insensitive" } },
         ],
       },
+      // Directory replication uses the lifecycle employee code as employeeId,
+      // while older Entra-created rows used the UPN. During that migration both
+      // rows can match the same SSO identity. Prefer the current directory row
+      // so report traversal starts from the replicated manager hierarchy.
+      orderBy: [
+        { isActive: "desc" },
+        { lastSyncedAt: "desc" },
+        { updatedAt: "desc" },
+      ],
       select: { employeeId: true, displayName: true, email: true, isManager: true },
     });
     if (!user) return null;

@@ -89,12 +89,15 @@ async function fetchCurrentEmployeeStates(): Promise<SourceEmployeeState[]> {
           row_number() OVER (
             PARTITION BY btrim(employee_code)
             ORDER BY
+              -- Duplicate lifecycle rows can disagree after an employee changes
+              -- state. The newest source observation is authoritative; status is
+              -- only a deterministic tie-breaker for observations at the same time.
+              last_paycom_sync_at DESC NULLS LAST,
               CASE
                 WHEN btrim(employee_status) = 'A' AND btrim(state_status) = 'ACTIVE' THEN 0
                 WHEN btrim(employee_status) = 'T' AND btrim(state_status) = 'OFFBOARDING' THEN 1
                 ELSE 2
               END,
-              last_paycom_sync_at DESC NULLS LAST,
               source_person_key
           ) AS canonical_rank
         FROM ${sourceTable}
