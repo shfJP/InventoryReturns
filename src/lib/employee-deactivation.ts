@@ -70,17 +70,43 @@ export async function recordUnresolvedCollectionsForEmployees(
     const collectedAssetTagList = Array.from(collectedAssetTags);
 
     for (let i = 0; i < collectedAssetTagList.length; i += 500) {
-      await prisma.unresolvedCollection.updateMany({
+      const assetTags = collectedAssetTagList.slice(i, i + 500);
+      const unresolvedRows = await prisma.unresolvedCollection.findMany({
         where: {
           status: "UNRESOLVED",
           employeeId: user.employeeId,
-          assetTag: { in: collectedAssetTagList.slice(i, i + 500) },
+          assetTag: { in: assetTags },
         },
-        data: {
-          status: "RESOLVED",
-          resolvedAt: now,
-        },
+        select: { id: true, assetTag: true },
       });
+      const resolvedRows = await prisma.unresolvedCollection.findMany({
+        where: {
+          status: "RESOLVED",
+          employeeId: user.employeeId,
+          assetTag: { in: assetTags },
+        },
+        select: { assetTag: true },
+      });
+      const alreadyResolvedAssetTags = new Set(resolvedRows.map((row) => row.assetTag));
+      const duplicateIds = unresolvedRows
+        .filter((row) => alreadyResolvedAssetTags.has(row.assetTag))
+        .map((row) => row.id);
+      const resolvableIds = unresolvedRows
+        .filter((row) => !alreadyResolvedAssetTags.has(row.assetTag))
+        .map((row) => row.id);
+
+      if (duplicateIds.length > 0) {
+        await prisma.unresolvedCollection.deleteMany({ where: { id: { in: duplicateIds } } });
+      }
+      if (resolvableIds.length > 0) {
+        await prisma.unresolvedCollection.updateMany({
+          where: { id: { in: resolvableIds } },
+          data: {
+            status: "RESOLVED",
+            resolvedAt: now,
+          },
+        });
+      }
     }
 
     for (const item of assignedItems) {
