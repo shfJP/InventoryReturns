@@ -29,9 +29,12 @@ export const DEFAULT_SYNC_SETTINGS: SyncSettings = {
 
 function normalizeSyncSettings(value: Partial<SyncSettings> | null | undefined): SyncSettings {
   const legacyInterval = Number((value as Partial<SyncSettings> & { intervalMinutes?: number } | null | undefined)?.intervalMinutes);
-  const entraInterval = value?.entraIntervalMinutes ?? (Number.isFinite(legacyInterval) && legacyInterval > 0
-    ? legacyInterval
-    : DEFAULT_SYNC_SETTINGS.entraIntervalMinutes);
+  const configuredDirectoryInterval = Number(process.env.DIRECTORY_SYNC_INTERVAL_MINUTES);
+  const entraInterval = Number.isFinite(configuredDirectoryInterval) && configuredDirectoryInterval > 0
+    ? configuredDirectoryInterval
+    : value?.entraIntervalMinutes ?? (Number.isFinite(legacyInterval) && legacyInterval > 0
+      ? legacyInterval
+      : DEFAULT_SYNC_SETTINGS.entraIntervalMinutes);
   const reftabInterval = value?.reftabIntervalMinutes ?? (Number.isFinite(legacyInterval) && legacyInterval > 0
     ? legacyInterval
     : DEFAULT_SYNC_SETTINGS.reftabIntervalMinutes);
