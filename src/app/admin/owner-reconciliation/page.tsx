@@ -145,9 +145,9 @@ async function fetchReftabCategories(): Promise<CategoryOption[]> {
 
 function ownerStatusLabel(status: MissingReftabAssetRow["ownerStatus"]) {
   return {
-    active: "Active Entra owner",
+    active: "Active directory owner",
     missing: "No owner signal",
-    unresolved: "Owner not in Entra",
+    unresolved: "Owner not in directory",
     inactive: "Inactive owner",
   }[status];
 }
@@ -367,7 +367,7 @@ export default function OwnerReconciliationPage() {
           <SummaryPill label="Device matches" value={summary.matchedDeviceCount} />
           <SummaryPill label="Missing Reftab" value={summary.missingReftabCount} />
           <SummaryPill label="No owner signal" value={summary.missingNinjaOwnerCount} />
-          <SummaryPill label="Owner not in Entra" value={summary.unresolvedNinjaOwnerCount} />
+          <SummaryPill label="Owner not in directory" value={summary.unresolvedNinjaOwnerCount} />
           <SummaryPill label="Inactive owner" value={summary.inactiveNinjaOwnerCount} />
           <SummaryPill label="Already aligned" value={summary.alreadyMatchedOwnerCount} />
           <SummaryPill label="Mismatches" value={summary.mismatchCount} />
@@ -409,7 +409,7 @@ export default function OwnerReconciliationPage() {
                   <td className="table-cell text-[var(--text-secondary)]">{row.serial ?? "-"}</td>
                   <td className="table-cell">
                     <div className="font-medium text-[var(--text)]">{ownerLabel(row.reftabOwner, row.reftabOwnerEmployeeId)}</div>
-                    <div className="text-xs text-[var(--muted)]">{row.reftabOwner?.email ?? "No active Entra match"}</div>
+                    <div className="text-xs text-[var(--muted)]">{row.reftabOwner?.email ?? "No active directory match"}</div>
                   </td>
                   <td className="table-cell">
                     <div className="font-medium text-[var(--text)]">{ownerLabel(row.ninjaOwner, row.ninjaOwner.employeeId)}</div>

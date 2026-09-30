@@ -244,7 +244,7 @@ export default function CascadeReportsPage() {
           <div className="px-4 py-12 text-center text-[var(--muted)]">
             <p>No reports in hierarchy.</p>
             <p className="mt-2 text-xs">
-              Staff appear here only after Entra sync links users to your manager relationship. Equipment/Reftab sync is not required.
+              Staff appear here only after directory sync links users to your manager relationship. Equipment/Reftab sync is not required.
             </p>
           </div>
         )}

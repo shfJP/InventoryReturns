@@ -6,7 +6,7 @@ if [ -z "${DATABASE_URL:-}" ]; then
   exit 1
 fi
 
-echo "==> Using DATABASE_URL=${DATABASE_URL}"
+echo "==> DATABASE_URL is configured."
 
 echo "==> Running prisma db push (create/sync tables)..."
 npx prisma db push --skip-generate --accept-data-loss 2>&1

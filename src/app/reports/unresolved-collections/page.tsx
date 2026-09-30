@@ -507,7 +507,7 @@ export default function UnresolvedCollectionsPage() {
 
       <div>
         <h1 className="text-2xl font-bold text-[var(--text)]">Unresolved Collections</h1>
-        <p className="text-[var(--muted)]">Terminated employees or Reftab assignments that do not map cleanly to Entra users.</p>
+        <p className="text-[var(--muted)]">Terminated employees or Reftab assignments that do not map cleanly to directory users.</p>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">

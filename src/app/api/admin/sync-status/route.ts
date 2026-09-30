@@ -37,7 +37,9 @@ export async function GET() {
 
   return NextResponse.json({
     lastSyncedAt,
+    directorySyncedAt: entraSyncedAt,
     reftabSyncedAt,
+    // Retained for existing clients and persisted sync setting/status keys.
     entraSyncedAt,
     ninjaOneSyncedAt,
     entra: runStatus.entra,

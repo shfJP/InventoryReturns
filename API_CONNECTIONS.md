@@ -8,9 +8,9 @@ After deployment, wire these via **environment variables** (see `.env.example`).
 
 | Env | Description |
 |-----|-------------|
-| `DATABASE_URL` | SQLite: `file:./dev.db` (pilot). Production: `postgresql://user:pass@host:5432/dbname`. |
+| `DATABASE_URL` | Target PostgreSQL owned by this app, for example `postgresql://user:pass@host:5432/dbname?schema=public`. |
 
-No external API. App uses this DB for users, equipment cache, and collection logs.
+The app uses this DB for the replicated directory snapshot, users, equipment cache, and collection logs.
 
 ---
 
@@ -52,15 +52,43 @@ If Reftab env vars are not set (or keys missing), the app uses only **DB-cached*
 
 ---
 
-## 3. Active Directory / Entra (manager hierarchy)
+## 3. Employee directory PostgreSQL
 
-Not a runtime API. Populate the **User** table from AD/Entra (scheduled job or script). Required fields:
+When `DIRECTORY_DATABASE_URL` is set, the lifecycle database is the authoritative source for employee activity and manager hierarchy. Microsoft Graph is used as the sync fallback only when this URL is absent; Entra SSO is independent and can remain enabled.
 
-- `employeeId` (or UPN / samAccountName as stable id)
-- `displayName`, `email`
-- `managerId` (FK to another User’s `id`, from manager’s `employeeId`)
+| Env | Default | Description |
+|-----|---------|-------------|
+| `DIRECTORY_DATABASE_URL` | empty | PostgreSQL connection URL for a **read-only** lifecycle database account. Treat it as a secret. |
+| `DIRECTORY_DATABASE_SCHEMA` | `paycom` | Source schema. Must be a simple PostgreSQL identifier. |
+| `DIRECTORY_EMPLOYEE_STATE_TABLE` | `paycom_employee_state` | Source table. Must be a simple PostgreSQL identifier. |
+| `DIRECTORY_SOURCE_NAME` | `paycom` | Source marker written onto target `User` rows. |
+| `DIRECTORY_SYNC_MIN_ROWS` | `100` | Safety floor. A smaller canonical result aborts before stale target rows are deleted. Set this near the expected lower bound in production. |
+| `DIRECTORY_SYNC_BATCH_SIZE` | `500` | Target upsert batch size, clamped to 50–1000. |
+| `DIRECTORY_SYNC_INTERVAL_MINUTES` | `720` | Default scheduled directory interval. A value saved in Settings can override it. |
 
-Pilot can use seed data only.
+The source query uses:
+
+- `source_person_key`
+- `employee_code`
+- `employee_name`
+- `work_email`
+- `supervisor_primary_code`
+- `employee_status`
+- `state_status`
+- `termination_date`
+- `last_paycom_sync_at`
+
+It excludes `MERGED_DUPLICATE`, selects one canonical row per trimmed employee code, and ranks active/active first, terminated/offboarding second, then newest source sync. The target sync refreshes `DirectoryEmployeeState`, upserts `User`, rebuilds manager relationships, marks stale directory users inactive, and creates unresolved equipment-collection records when an employee transitions inactive. If the database source is configured but the target snapshot is empty, the worker performs one bootstrap sync at container startup even when normal startup sync is disabled.
+
+Recommended source grants:
+
+```sql
+GRANT CONNECT ON DATABASE lifecycle TO inventory_returns_directory_ro;
+GRANT USAGE ON SCHEMA paycom TO inventory_returns_directory_ro;
+GRANT SELECT ON TABLE paycom.paycom_employee_state TO inventory_returns_directory_ro;
+```
+
+Do not grant target-table write permissions or use the lifecycle database owner credential in the application.
 
 ---
 

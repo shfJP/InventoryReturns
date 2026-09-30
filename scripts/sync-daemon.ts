@@ -1,14 +1,14 @@
-import { syncEntraToDb } from "../src/lib/entra";
+import { configuredDirectorySource, syncDirectoryToDb } from "../src/lib/directory-sync";
 import { syncNinjaOneToDb } from "../src/lib/ninjaone";
 import { syncReftabToDb } from "../src/lib/ref-tab";
 import { getSyncSettings } from "../src/lib/sync-settings";
 import { markSyncDaemonHeartbeat, markSyncFailed, markSyncFinished, markSyncStarted } from "../src/lib/sync-status";
 import { prisma } from "../src/lib/db";
 
-let entraRunning = false;
+let directoryRunning = false;
 let reftabRunning = false;
 let ninjaOneRunning = false;
-let lastEntraScheduledRunAt = 0;
+let lastDirectoryScheduledRunAt = 0;
 let lastReftabScheduledRunAt = 0;
 let lastNinjaOneScheduledRunAt = 0;
 
@@ -16,25 +16,25 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function runEntraSync(reason: string): Promise<void> {
-  if (entraRunning) {
-    console.info(`[sync] Skipping Entra ${reason}: sync already running.`);
+async function runDirectorySync(reason: string): Promise<void> {
+  if (directoryRunning) {
+    console.info(`[sync] Skipping Directory ${reason}: sync already running.`);
     return;
   }
 
-  entraRunning = true;
-  console.info(`[sync] Starting Entra ${reason}.`);
+  directoryRunning = true;
+  console.info(`[sync] Starting Directory ${reason}.`);
   try {
     await markSyncStarted("entra");
-    const result = await syncEntraToDb();
+    const result = await syncDirectoryToDb();
     await markSyncFinished("entra", result);
-    console.info(`[sync] Entra complete: ${JSON.stringify(result)}.`);
+    console.info(`[sync] Directory complete: ${JSON.stringify(result)}.`);
   } catch (e) {
     await markSyncFailed("entra", e);
-    console.warn(`[sync] Entra failed: ${e instanceof Error ? e.message : String(e)}`);
+    console.warn(`[sync] Directory failed: ${e instanceof Error ? e.message : String(e)}`);
   } finally {
-    entraRunning = false;
-    console.info(`[sync] Finished Entra ${reason}.`);
+    directoryRunning = false;
+    console.info(`[sync] Finished Directory ${reason}.`);
   }
 }
 
@@ -88,13 +88,24 @@ async function main(): Promise<void> {
   await markSyncDaemonHeartbeat(startedAt);
 
   const initialSettings = await getSyncSettings();
+  const directorySnapshotMissing =
+    configuredDirectorySource() === "database" &&
+    await prisma.directoryEmployeeState.count() === 0;
+  if (initialSettings.autoSyncOnStartup || directorySnapshotMissing) {
+    if (initialSettings.syncEntra || directorySnapshotMissing) {
+      await runDirectorySync(directorySnapshotMissing ? "initial snapshot bootstrap" : "startup sync");
+      lastDirectoryScheduledRunAt = Date.now();
+    }
+  }
   if (initialSettings.autoSyncOnStartup) {
-    if (initialSettings.syncEntra) await runEntraSync("startup sync");
-    if (initialSettings.syncReftab) await runReftabSync("startup sync");
-    if (initialSettings.syncNinjaOne) await runNinjaOneSync("startup sync");
-    lastEntraScheduledRunAt = Date.now();
-    lastReftabScheduledRunAt = Date.now();
-    lastNinjaOneScheduledRunAt = Date.now();
+    if (initialSettings.syncReftab) {
+      await runReftabSync("startup sync");
+      lastReftabScheduledRunAt = Date.now();
+    }
+    if (initialSettings.syncNinjaOne) {
+      await runNinjaOneSync("startup sync");
+      lastNinjaOneScheduledRunAt = Date.now();
+    }
   }
 
   while (true) {
@@ -104,13 +115,13 @@ async function main(): Promise<void> {
     if (!settings.cronEnabled) continue;
 
     const now = Date.now();
-    const entraIntervalMs = Math.max(settings.entraIntervalMinutes, 5) * 60_000;
+    const directoryIntervalMs = Math.max(settings.entraIntervalMinutes, 5) * 60_000;
     const reftabIntervalMs = Math.max(settings.reftabIntervalMinutes, 5) * 60_000;
     const ninjaOneIntervalMs = Math.max(settings.ninjaOneIntervalMinutes, 5) * 60_000;
 
-    if (settings.syncEntra && now - lastEntraScheduledRunAt >= entraIntervalMs) {
-      await runEntraSync(`scheduled sync every ${settings.entraIntervalMinutes} minute(s)`);
-      lastEntraScheduledRunAt = Date.now();
+    if (settings.syncEntra && now - lastDirectoryScheduledRunAt >= directoryIntervalMs) {
+      await runDirectorySync(`scheduled sync every ${settings.entraIntervalMinutes} minute(s)`);
+      lastDirectoryScheduledRunAt = Date.now();
     }
 
     if (settings.syncReftab && now - lastReftabScheduledRunAt >= reftabIntervalMs) {

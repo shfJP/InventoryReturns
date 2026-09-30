@@ -47,6 +47,7 @@ Once you set env vars (from `.env.example`) and run the app with a migrated (and
 | What you configure | What works |
 |--------------------|------------|
 | **Minimum:** `DATABASE_URL` + `MANAGER_EMPLOYEE_IDS` (and you’ve run `prisma db push` + `db:seed`) | App runs. Manager can log in (pilot: first manager in list or `CURRENT_USER_EMPLOYEE_ID`). Staff list (from DB), equipment from **seed/cache only**, mark collected, collection log, close-out. **No** IT notifications (call fails quietly); **no** live ref tab. |
+| **+ Employee directory PostgreSQL:** `DIRECTORY_DATABASE_URL` and optional directory settings | The app snapshots canonical employee state into `DirectoryEmployeeState`, updates `User` activity and manager relationships, and exposes active, terminated, and review states under **Admin → Directory**. This source is authoritative when configured; Microsoft Graph remains the fallback. |
 | **+ Reftab:** `REF_TAB_API_URL` (default `https://www.reftab.com/api`), `REF_TAB_API_PUBLIC_KEY`, `REF_TAB_API_SECRET_KEY` | Everything above, plus equipment is **merged from Reftab** via `GET /assets` (HMAC auth). Optional field mapping env vars — see [API_CONNECTIONS.md](./API_CONNECTIONS.md). If Reftab is not configured or returns nothing, cached/seed equipment still shows. |
 | **+ Notifications:** `NOTIFICATION_PROVIDER` + one of `WEBHOOK_URL` / `TEAMS_WEBHOOK_URL` / SMTP vars | When a manager marks an item collected, **IT is notified** (webhook POST, Teams message, or email). Collection event is still stored even if the notification fails. |
 | **+ `APP_BASE_URL`** | Links in notifications point to this URL (e.g. collection page). |
@@ -80,7 +81,7 @@ Open http://localhost:3000. Pilot auth uses `CURRENT_USER_EMPLOYEE_ID` (or first
 - **What:** PostgreSQL.
 - **Env:** `DATABASE_URL`
   - Example: `postgresql://user:pass@host:5432/dbname?schema=public`
-- **Usage:** Users (AD/Entra sync), equipment cache, collection events. No external API; app owns the DB.
+- **Usage:** Replicated users and employee states, equipment cache, and collection events. The app owns this target DB.
 
 ---
 
@@ -95,13 +96,15 @@ Open http://localhost:3000. Pilot auth uses `CURRENT_USER_EMPLOYEE_ID` (or first
 
 ---
 
-### 3) **Active Directory / Entra (manager hierarchy)**
+### 3) **Employee directory PostgreSQL + Microsoft Entra**
 
-- **What:** Source of users and manager chain (who reports to whom).
-- **How (today):** No live AD/Entra API is called by the app. Users and manager links are stored in the app DB and must be **synced from AD/Entra** (e.g. scheduled job or script that writes to the `User` table).
-- **Required fields to sync:**  
-  `employee_id` (or UPN/samAccountName as stable id), `display_name`, `email`, `manager` (reference to another user’s `employee_id`). Set `is_manager` if they have direct reports.
-- **Pilot:** Seed script fills sample users; for production you need a sync process that updates `User` (and optionally `last_synced_at`) from your directory.
+- **Authoritative employee state:** Configure `DIRECTORY_DATABASE_URL` to read the lifecycle table (default `paycom.paycom_employee_state`). The account should have only `CONNECT`, schema `USAGE`, and table `SELECT`.
+- **Canonical identity:** One row per trimmed employee code is selected. `MERGED_DUPLICATE` rows are excluded; active rows win, then terminated/offboarding rows, then the newest remaining source row.
+- **State mapping:** `employee_status=A` with `state_status=ACTIVE` is active. `employee_status=T` with `state_status=OFFBOARDING` is terminated. `NEEDS_REVIEW` remains visible for follow-up.
+- **Target:** Every sync refreshes `DirectoryEmployeeState`, upserts the `User` table, rebuilds manager links, and marks missing directory-sourced users inactive.
+- **Safety:** `DIRECTORY_SYNC_MIN_ROWS` aborts an unexpectedly small source read before stale target rows are removed.
+- **SSO:** Microsoft Entra remains the sign-in provider. If `DIRECTORY_DATABASE_URL` is absent, Microsoft Graph remains the backward-compatible user/manager sync source.
+- **Operations:** Run manually from **Admin → Sync Directory** or enable startup/scheduled sync in **Settings → Sync automation**.
 
 ---
 
@@ -137,7 +140,8 @@ Exactly one channel is used, driven by `NOTIFICATION_PROVIDER` and the correspon
 |------------------|-------------|----------------------|--------------|
 | Database         | Internal DB | Yes                  | `DATABASE_URL` |
 | Reftab           | HTTP API    | No (use seed data)   | `REF_TAB_API_URL`, `REF_TAB_API_PUBLIC_KEY`, `REF_TAB_API_SECRET_KEY` (+ optional field envs) |
-| AD/Entra         | Sync → DB   | No (use seed)        | Your sync job + `User` table |
+| Employee directory | PostgreSQL snapshot → DB | No (use seed) | `DIRECTORY_DATABASE_URL` plus optional `DIRECTORY_*` settings |
+| Microsoft Entra  | SSO + fallback Graph sync | No (pilot mode) | `AZURE_AD_TENANT_ID`, `AZURE_AD_CLIENT_ID`, `AZURE_AD_CLIENT_SECRET`, `NEXTAUTH_SECRET` |
 | IT notification  | Webhook/Teams/Email | Yes (to alert IT) | `NOTIFICATION_PROVIDER` + `WEBHOOK_URL` or `TEAMS_WEBHOOK_URL` or SMTP vars |
 | Auth             | Env / later SSO | Yes (env)        | `CURRENT_USER_EMPLOYEE_ID`, `MANAGER_EMPLOYEE_IDS` |
 

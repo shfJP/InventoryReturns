@@ -18,6 +18,11 @@ model User {
   directReports     User[]   @relation("ManagerReports")
   isManager         Boolean  @default(false)
   isActive          Boolean  @default(true)
+  directorySource          String?
+  directorySourcePersonKey String?
+  employmentStatus         String?
+  directoryState           String?
+  terminationDate          DateTime?
   lastSyncedAt      DateTime?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -25,6 +30,25 @@ model User {
   equipmentAssignments EquipmentAssignment[]
   markedCollections    CollectionEvent[]  @relation("MarkedByManager")
   closedOutEvents      CollectionEvent[]  @relation("ClosedOutByIT")
+}
+
+model DirectoryEmployeeState {
+  employeeId        String   @id
+  sourcePersonKey   String
+  displayName       String
+  email             String?
+  managerEmployeeId String?
+  employmentStatus  String
+  directoryState    String
+  isActive          Boolean
+  terminationDate   DateTime?
+  sourceSyncedAt    DateTime?
+  replicatedAt      DateTime
+
+  @@index([employmentStatus])
+  @@index([directoryState])
+  @@index([isActive])
+  @@index([managerEmployeeId])
 }
 
 model EquipmentAssignment {
