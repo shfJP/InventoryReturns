@@ -17,7 +17,10 @@ export const DEFAULT_SYNC_SETTINGS: SyncSettings = {
   autoSyncOnStartup: process.env.AUTO_SYNC_ON_STARTUP === "true",
   cronEnabled: process.env.SYNC_CRON_ENABLED === "true",
   syncEntra: process.env.SYNC_CRON_ENTRA !== "false",
-  entraIntervalMinutes: Math.max(Number(process.env.SYNC_CRON_ENTRA_INTERVAL_MINUTES) || 720, 5),
+  entraIntervalMinutes: Math.max(
+    Number(process.env.DIRECTORY_SYNC_INTERVAL_MINUTES ?? process.env.SYNC_CRON_ENTRA_INTERVAL_MINUTES) || 720,
+    5,
+  ),
   syncReftab: process.env.SYNC_CRON_REFTAB !== "false",
   reftabIntervalMinutes: Math.max(Number(process.env.SYNC_CRON_REFTAB_INTERVAL_MINUTES) || 10, 5),
   syncNinjaOne: process.env.SYNC_CRON_NINJAONE !== "false",

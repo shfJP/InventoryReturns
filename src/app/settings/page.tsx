@@ -169,7 +169,7 @@ export default function SettingsPage() {
           <div className="mt-4 space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
               <SyncDaemonCard status={syncStatus?.daemon} />
-              <SyncStatusCard label="Entra" status={syncStatus?.entra} />
+              <SyncStatusCard label="Directory" status={syncStatus?.entra} />
               <SyncStatusCard label="Reftab" status={syncStatus?.reftab} />
               <SyncStatusCard label="NinjaOne" status={syncStatus?.ninjaone} />
             </div>
@@ -208,10 +208,10 @@ export default function SettingsPage() {
                     checked={syncSettings.syncEntra}
                     onChange={(e) => setSyncSettings({ ...syncSettings, syncEntra: e.target.checked })}
                   />
-                  Sync Entra
+                  Sync Directory
                 </label>
                 <label className="mt-3 block">
-                  <span className="text-xs font-medium text-[var(--muted)]">Entra interval minutes</span>
+                  <span className="text-xs font-medium text-[var(--muted)]">Directory interval minutes</span>
                   <input
                     type="number"
                     min={5}

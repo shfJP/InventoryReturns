@@ -52,7 +52,7 @@ export default function Sidebar() {
       .then((data) => {
         if (!data) return;
         setSyncStates({
-          entra: statusToSyncState(data.entra?.state, data.entraSyncedAt),
+          entra: statusToSyncState(data.entra?.state, data.directorySyncedAt ?? data.entraSyncedAt),
           reftab: statusToSyncState(data.reftab?.state, data.reftabSyncedAt),
           ninjaone: statusToSyncState(data.ninjaone?.state, data.ninjaOneSyncedAt),
         });
@@ -69,7 +69,7 @@ export default function Sidebar() {
         .then((data) => {
           if (!data) return;
           const nextStates = {
-            entra: statusToSyncState(data.entra?.state, data.entraSyncedAt),
+            entra: statusToSyncState(data.entra?.state, data.directorySyncedAt ?? data.entraSyncedAt),
             reftab: statusToSyncState(data.reftab?.state, data.reftabSyncedAt),
             ninjaone: statusToSyncState(data.ninjaone?.state, data.ninjaOneSyncedAt),
           };
@@ -151,7 +151,7 @@ export default function Sidebar() {
                 <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">Admin</p>
               </div>
               <SyncButton
-                label="Sync Entra"
+                label="Sync Directory"
                 endpoint="/api/admin/sync-entra"
                 state={syncStates.entra}
                 onStateChange={(state) => setSyncStates((prev) => ({ ...prev, entra: state }))}
@@ -181,6 +181,7 @@ export default function Sidebar() {
                 }}
               />
               <AdminLink href="/admin/asset-values" label="Asset Values" active={pathname === "/admin/asset-values"} />
+              <AdminLink href="/admin/directory" label="Directory" active={pathname === "/admin/directory"} />
               <AdminLink href="/admin/owner-reconciliation" label="Owner Reconcile" active={pathname === "/admin/owner-reconciliation"} />
               <AdminLink href="/admin/reftab-usage" label="Reftab Usage" active={pathname === "/admin/reftab-usage"} />
             </>

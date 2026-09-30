@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No current NinjaOne device missing from Reftab was found for this request." }, { status: 404 });
     }
     if (!row.ninjaOwner?.isActive) {
-      return NextResponse.json({ error: "This NinjaOne device does not resolve to an active Entra owner yet." }, { status: 400 });
+      return NextResponse.json({ error: "This NinjaOne device does not resolve to an active directory owner yet." }, { status: 400 });
     }
     const existingAssignment = await prisma.equipmentAssignment.findFirst({
       where: { assetTag: row.assetTag },
