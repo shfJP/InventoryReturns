@@ -64,7 +64,8 @@ When `DIRECTORY_DATABASE_URL` is set, the lifecycle database is the authoritativ
 | `DIRECTORY_SOURCE_NAME` | `paycom` | Source marker written onto target `User` rows. |
 | `DIRECTORY_SYNC_MIN_ROWS` | `100` | Safety floor. A smaller canonical result aborts before stale target rows are deleted. Set this near the expected lower bound in production. |
 | `DIRECTORY_SYNC_BATCH_SIZE` | `500` | Target upsert batch size, clamped to 50–1000. |
-| `DIRECTORY_SYNC_INTERVAL_MINUTES` | `720` | Default scheduled directory interval. A value saved in Settings can override it. |
+| `DIRECTORY_SYNC_INTERVAL_MINUTES` | `720` | Scheduled directory interval. When explicitly set, this overrides an older value saved in Settings. |
+| `DIRECTORY_SYNC_SCHEDULE_ENABLED` | `false` | Set `true` to keep the database-backed directory schedule running independently of the shared cron toggle. |
 
 The source query uses:
 

@@ -88,6 +88,9 @@ async function main(): Promise<void> {
   await markSyncDaemonHeartbeat(startedAt);
 
   const initialSettings = await getSyncSettings();
+  const dedicatedDirectoryScheduleEnabled =
+    configuredDirectorySource() === "database" &&
+    process.env.DIRECTORY_SYNC_SCHEDULE_ENABLED === "true";
   const directorySnapshotMissing =
     configuredDirectorySource() === "database" &&
     await prisma.directoryEmployeeState.count() === 0;
@@ -112,24 +115,27 @@ async function main(): Promise<void> {
     await sleep(60_000);
     await markSyncDaemonHeartbeat(startedAt);
     const settings = await getSyncSettings();
-    if (!settings.cronEnabled) continue;
+    if (!settings.cronEnabled && !dedicatedDirectoryScheduleEnabled) continue;
 
     const now = Date.now();
     const directoryIntervalMs = Math.max(settings.entraIntervalMinutes, 5) * 60_000;
     const reftabIntervalMs = Math.max(settings.reftabIntervalMinutes, 5) * 60_000;
     const ninjaOneIntervalMs = Math.max(settings.ninjaOneIntervalMinutes, 5) * 60_000;
 
-    if (settings.syncEntra && now - lastDirectoryScheduledRunAt >= directoryIntervalMs) {
+    if (
+      (dedicatedDirectoryScheduleEnabled || (settings.cronEnabled && settings.syncEntra)) &&
+      now - lastDirectoryScheduledRunAt >= directoryIntervalMs
+    ) {
       await runDirectorySync(`scheduled sync every ${settings.entraIntervalMinutes} minute(s)`);
       lastDirectoryScheduledRunAt = Date.now();
     }
 
-    if (settings.syncReftab && now - lastReftabScheduledRunAt >= reftabIntervalMs) {
+    if (settings.cronEnabled && settings.syncReftab && now - lastReftabScheduledRunAt >= reftabIntervalMs) {
       await runReftabSync(`scheduled sync every ${settings.reftabIntervalMinutes} minute(s)`);
       lastReftabScheduledRunAt = Date.now();
     }
 
-    if (settings.syncNinjaOne && now - lastNinjaOneScheduledRunAt >= ninjaOneIntervalMs) {
+    if (settings.cronEnabled && settings.syncNinjaOne && now - lastNinjaOneScheduledRunAt >= ninjaOneIntervalMs) {
       await runNinjaOneSync(`scheduled sync every ${settings.ninjaOneIntervalMinutes} minute(s)`);
       lastNinjaOneScheduledRunAt = Date.now();
     }
