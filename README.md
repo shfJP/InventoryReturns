@@ -99,11 +99,11 @@ Open http://localhost:3000. Pilot auth uses `CURRENT_USER_EMPLOYEE_ID` (or first
 ### 3) **Employee directory PostgreSQL + Microsoft Entra**
 
 - **Authoritative employee state:** Configure `DIRECTORY_DATABASE_URL` to read the lifecycle table (default `paycom.paycom_employee_state`). The account should have only `CONNECT`, schema `USAGE`, and table `SELECT`.
-- **Canonical identity:** One row per trimmed employee code is selected. `MERGED_DUPLICATE` rows are excluded; active rows win, then terminated/offboarding rows, then the newest remaining source row.
+- **Canonical identity:** One row per trimmed employee code is selected. `MERGED_DUPLICATE` rows are excluded and the newest `last_paycom_sync_at` observation wins; lifecycle state and source key provide deterministic tie-breakers.
 - **State mapping:** `employee_status=A` with `state_status=ACTIVE` is active. `employee_status=T` with `state_status=OFFBOARDING` is terminated. `NEEDS_REVIEW` remains visible for follow-up.
 - **Target:** Every sync refreshes `DirectoryEmployeeState`, upserts the `User` table, rebuilds manager links, and marks missing directory-sourced users inactive.
 - **Safety:** `DIRECTORY_SYNC_MIN_ROWS` aborts an unexpectedly small source read before stale target rows are removed.
-- **SSO:** Microsoft Entra remains the sign-in provider. If `DIRECTORY_DATABASE_URL` is absent, Microsoft Graph remains the backward-compatible user/manager sync source.
+- **SSO:** Microsoft Entra remains the sign-in provider. SSO identities are matched case-insensitively against employee ID, UPN, and email, preferring the active, recently synced directory row when legacy UPN-based rows coexist. If `DIRECTORY_DATABASE_URL` is absent, Microsoft Graph remains the backward-compatible user/manager sync source.
 - **Operations:** Run manually from **Admin → Sync Directory** or enable startup/scheduled sync in **Settings → Sync automation**.
 
 ---

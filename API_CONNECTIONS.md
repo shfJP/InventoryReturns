@@ -79,7 +79,7 @@ The source query uses:
 - `termination_date`
 - `last_paycom_sync_at`
 
-It excludes `MERGED_DUPLICATE`, selects one canonical row per trimmed employee code, and ranks active/active first, terminated/offboarding second, then newest source sync. The target sync refreshes `DirectoryEmployeeState`, upserts `User`, rebuilds manager relationships, marks stale directory users inactive, and creates unresolved equipment-collection records when an employee transitions inactive. If the database source is configured but the target snapshot is empty, the worker performs one bootstrap sync at container startup even when normal startup sync is disabled.
+It excludes `MERGED_DUPLICATE`, selects one canonical row per trimmed employee code, and treats the newest `last_paycom_sync_at` observation as authoritative. Lifecycle state and source key are deterministic tie-breakers when timestamps match. The target sync refreshes `DirectoryEmployeeState`, upserts `User`, rebuilds manager relationships, marks stale directory users inactive, and creates unresolved equipment-collection records when an employee transitions inactive. Entra SSO identity lookup is case-insensitive across employee ID, UPN, and email and prefers the active, recently synced directory row, which bridges legacy UPN-based users to lifecycle employee codes. If the database source is configured but the target snapshot is empty, the worker performs one bootstrap sync at container startup even when normal startup sync is disabled.
 
 Recommended source grants:
 

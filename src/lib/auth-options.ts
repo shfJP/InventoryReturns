@@ -99,11 +99,16 @@ export const authOptions: NextAuthOptions = {
       const existing = await prisma.user.findFirst({
         where: {
           OR: [
-            { employeeId },
-            { upn },
-            { email: upn },
+            { employeeId: { equals: employeeId, mode: "insensitive" } },
+            { upn: { equals: upn, mode: "insensitive" } },
+            { email: { equals: upn, mode: "insensitive" } },
           ],
         },
+        orderBy: [
+          { isActive: "desc" },
+          { lastSyncedAt: "desc" },
+          { updatedAt: "desc" },
+        ],
       });
 
       if (!existing) {
