@@ -2483,7 +2483,7 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
       skippedUnmatchedAssignee++;
       currentUnresolvedKeys.add(await logUnresolvedReftabAssignment(asset, userAliases, resolvedUser));
       unmatchedLogged++;
-      console.warn(`[reftab] Logging asset ${asset.asset_tag} as unresolved: assignee "${asset.assigned_to_employee_id}" does not match an active Entra user.`);
+      console.warn(`[reftab] Logging asset ${asset.asset_tag} as unresolved: assignee "${asset.assigned_to_employee_id}" does not match an active directory user.`);
       continue;
     }
 
@@ -2549,27 +2549,56 @@ export async function syncReftabToDb(): Promise<ReftabSyncResult> {
     const staleUnresolved = await prisma.unresolvedCollection.findMany({
       where: {
         status: { not: "RESOLVED" },
+        source: "reftab_unmatched_assignee",
       },
       select: { id: true, employeeId: true, assetTag: true },
     });
-    const staleUnresolvedIds = staleUnresolved
-      .filter((item) => !currentUnresolvedKeys.has(unresolvedAssignmentKey(item.employeeId, item.assetTag)))
-      .map((item) => item.id);
-    for (let i = 0; i < staleUnresolvedIds.length; i += 500) {
-      const ids = staleUnresolvedIds.slice(i, i + 500);
-      const result = await prisma.unresolvedCollection.updateMany({
-        where: { id: { in: ids } },
-        data: { status: "RESOLVED", resolvedAt: now },
+    const staleUnresolvedRows = staleUnresolved.filter(
+      (item) => !currentUnresolvedKeys.has(unresolvedAssignmentKey(item.employeeId, item.assetTag)),
+    );
+    for (let i = 0; i < staleUnresolvedRows.length; i += 500) {
+      const rows = staleUnresolvedRows.slice(i, i + 500);
+      const resolvedRows = await prisma.unresolvedCollection.findMany({
+        where: {
+          status: "RESOLVED",
+          OR: rows.map((row) => ({
+            employeeId: row.employeeId,
+            assetTag: row.assetTag,
+          })),
+        },
+        select: { employeeId: true, assetTag: true },
       });
-      staleUnresolvedResolved += result.count;
-      await prisma.unresolvedCollectionAudit.createMany({
-        data: ids.map((id) => ({
-          unresolvedCollectionId: id,
-          action: "AUTO_RESOLVED_REFTAB_SYNC",
-          newStatus: "RESOLVED",
-          note: "Resolved automatically because the asset no longer appears as a current Reftab loan assigned to a disabled or missing Entra user.",
-        })),
-      });
+      const resolvedKeys = new Set(
+        resolvedRows.map((row) => unresolvedAssignmentKey(row.employeeId, row.assetTag)),
+      );
+      const duplicateIds = rows
+        .filter((row) => resolvedKeys.has(unresolvedAssignmentKey(row.employeeId, row.assetTag)))
+        .map((row) => row.id);
+      const resolvableIds = rows
+        .filter((row) => !resolvedKeys.has(unresolvedAssignmentKey(row.employeeId, row.assetTag)))
+        .map((row) => row.id);
+
+      if (duplicateIds.length > 0) {
+        const deleted = await prisma.unresolvedCollection.deleteMany({
+          where: { id: { in: duplicateIds } },
+        });
+        staleUnresolvedResolved += deleted.count;
+      }
+      if (resolvableIds.length > 0) {
+        const result = await prisma.unresolvedCollection.updateMany({
+          where: { id: { in: resolvableIds } },
+          data: { status: "RESOLVED", resolvedAt: now },
+        });
+        staleUnresolvedResolved += result.count;
+        await prisma.unresolvedCollectionAudit.createMany({
+          data: resolvableIds.map((id) => ({
+            unresolvedCollectionId: id,
+            action: "AUTO_RESOLVED_REFTAB_SYNC",
+            newStatus: "RESOLVED",
+            note: "Resolved automatically because the asset no longer appears as a current Reftab loan assigned to a disabled or missing directory user.",
+          })),
+        });
+      }
     }
   }
 
