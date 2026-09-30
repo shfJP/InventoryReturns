@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { getCurrentEmployeeId } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import {
+  getReportEquipmentMetrics,
+  isOperationalReport,
+  loadReportEquipmentMetrics,
+  reportDirectoryUserScope,
+} from "@/lib/report-directory";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +25,10 @@ export async function GET() {
   }
 
   const directReports = await prisma.user.findMany({
-    where: { managerId: manager.id },
+    where: {
+      managerId: manager.id,
+      ...reportDirectoryUserScope(),
+    },
     select: {
       employeeId: true,
       displayName: true,
@@ -29,27 +38,26 @@ export async function GET() {
     orderBy: { displayName: "asc" },
   });
 
-  const result = await Promise.all(
-    directReports.map(async (report) => {
-      const assigned = await prisma.equipmentAssignment.count({
-        where: { assignedToEmployeeId: report.employeeId },
-      });
-      const collected = await prisma.collectionEvent.count({
-        where: {
-          assignedToEmployeeId: report.employeeId,
-          status: { in: ["COLLECTED_PENDING_IT", "CLOSED_OUT"] },
-        },
-      });
+  const metricsByEmployee = await loadReportEquipmentMetrics(
+    directReports.map((report) => report.employeeId),
+  );
+  const result = directReports
+    .map((report) => {
+      const metrics = getReportEquipmentMetrics(metricsByEmployee, report.employeeId);
       return {
         ...report,
-        assigned,
-        collected,
-        outstanding: report.isActive ? 0 : assigned,
-        // Outstanding means current equipment assigned to a disabled or missing Entra user.
-        totalEverAssigned: assigned + collected,
+        assigned: metrics.assigned,
+        collected: metrics.collected,
+        outstanding: report.isActive ? 0 : metrics.open,
+        totalEverAssigned: metrics.totalEverAssigned,
       };
     })
-  );
+    .filter((report) => isOperationalReport(report.isActive, {
+      assigned: report.assigned,
+      collected: report.collected,
+      open: report.outstanding,
+      totalEverAssigned: report.totalEverAssigned,
+    }));
 
   return NextResponse.json(result);
 }

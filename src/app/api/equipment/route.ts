@@ -23,30 +23,48 @@ export async function GET(req: NextRequest) {
 
   const includeCollected = req.nextUrl.searchParams.get("include_collected") === "true";
 
-  const fromDb = await prisma.equipmentAssignment.findMany({
-    where: { assignedToEmployeeId: { in: targetIds } },
-    select: {
-      id: true,
-      assetTag: true,
-      aid: true,
-      serial: true,
-      model: true,
-      title: true,
-      catName: true,
-      locationName: true,
-      statusName: true,
-      detailsJson: true,
-      assignedToEmployeeId: true,
-      source: true,
-      lastSyncedAt: true,
-      user: {
-        select: {
-          isActive: true,
+  const [fromDb, unresolvedCollections] = await Promise.all([
+    prisma.equipmentAssignment.findMany({
+      where: { assignedToEmployeeId: { in: targetIds } },
+      select: {
+        id: true,
+        assetTag: true,
+        aid: true,
+        serial: true,
+        model: true,
+        title: true,
+        catName: true,
+        locationName: true,
+        statusName: true,
+        detailsJson: true,
+        assignedToEmployeeId: true,
+        source: true,
+        lastSyncedAt: true,
+        user: {
+          select: {
+            isActive: true,
+          },
         },
       },
-    },
-    orderBy: { assetTag: "asc" },
-  });
+      orderBy: { assetTag: "asc" },
+    }),
+    prisma.unresolvedCollection.findMany({
+      where: {
+        employeeId: { in: targetIds },
+        status: { not: "RESOLVED" },
+      },
+      select: {
+        employeeId: true,
+        assetTag: true,
+        serial: true,
+        model: true,
+        catName: true,
+        source: true,
+        detectedAt: true,
+      },
+      orderBy: { assetTag: "asc" },
+    }),
+  ]);
 
   const collectionEvents = await prisma.collectionEvent.findMany({
     where: {
@@ -83,10 +101,33 @@ export async function GET(req: NextRequest) {
           : ("assigned" as const),
     };
   });
+  const assignmentKeys = new Set(
+    fromDb.map((item) => `${item.assignedToEmployeeId}\u0000${item.assetTag}`),
+  );
+  const unresolvedEquipment = unresolvedCollections
+    .filter((item) => !assignmentKeys.has(`${item.employeeId}\u0000${item.assetTag}`))
+    .map((item) => ({
+      id: null,
+      assetTag: item.assetTag,
+      serial: item.serial ?? undefined,
+      model: item.model ?? undefined,
+      title: item.model ?? undefined,
+      catName: item.catName ?? undefined,
+      statusName: "Pending collection",
+      assignedToEmployeeId: item.employeeId,
+      source: item.source,
+      lastSyncedAt: item.detectedAt.toISOString(),
+      collectionStatus: "outstanding" as const,
+    }));
+  const allEquipment = [...annotated, ...unresolvedEquipment]
+    .sort((a, b) => a.assetTag.localeCompare(b.assetTag, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    }));
 
   const result = includeCollected
-    ? annotated
-    : annotated.filter((e) => e.collectionStatus === "outstanding");
+    ? allEquipment
+    : allEquipment.filter((e) => e.collectionStatus === "outstanding");
 
   return NextResponse.json(result);
 }

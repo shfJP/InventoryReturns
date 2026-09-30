@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentEmployeeId } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import {
+  getReportEquipmentMetrics,
+  isOperationalReport,
+  loadReportEquipmentMetrics,
+  reportDirectoryUserScope,
+} from "@/lib/report-directory";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +26,10 @@ async function buildTree(parentId: string, depth: number, maxDepth: number): Pro
   if (maxDepth > 0 && depth > maxDepth) return [];
 
   const reports = await prisma.user.findMany({
-    where: { managerId: parentId },
+    where: {
+      managerId: parentId,
+      ...reportDirectoryUserScope(),
+    },
     select: {
       id: true,
       employeeId: true,
@@ -31,18 +40,14 @@ async function buildTree(parentId: string, depth: number, maxDepth: number): Pro
     orderBy: { displayName: "asc" },
   });
 
+  const metricsByEmployee = await loadReportEquipmentMetrics(
+    reports.map((report) => report.employeeId),
+  );
   const nodes: TreeNode[] = [];
   for (const report of reports) {
-    const assigned = await prisma.equipmentAssignment.count({
-      where: { assignedToEmployeeId: report.employeeId },
-    });
-    const collected = await prisma.collectionEvent.count({
-      where: {
-        assignedToEmployeeId: report.employeeId,
-        status: { in: ["COLLECTED_PENDING_IT", "CLOSED_OUT"] },
-      },
-    });
+    const metrics = getReportEquipmentMetrics(metricsByEmployee, report.employeeId);
     const children = await buildTree(report.id, depth + 1, maxDepth);
+    if (!isOperationalReport(report.isActive, metrics) && children.length === 0) continue;
 
     nodes.push({
       employeeId: report.employeeId,
@@ -50,9 +55,9 @@ async function buildTree(parentId: string, depth: number, maxDepth: number): Pro
       email: report.email,
       isActive: report.isActive,
       depth,
-      assigned,
-      collected,
-      outstanding: report.isActive ? 0 : assigned,
+      assigned: metrics.assigned,
+      collected: metrics.collected,
+      outstanding: report.isActive ? 0 : metrics.open,
       children,
     });
   }

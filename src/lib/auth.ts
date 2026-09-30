@@ -1,6 +1,7 @@
 import { getServerSession } from "next-auth";
 import { authOptions, isSSOConfigured } from "./auth-options";
 import { prisma } from "./db";
+import { reportDirectoryUserScope } from "./report-directory";
 
 const MANAGER_IDS = (process.env.MANAGER_EMPLOYEE_IDS ?? "EMP001,EMP002").split(",").map((s) => s.trim());
 const CURRENT_OVERRIDE = process.env.CURRENT_USER_EMPLOYEE_ID?.trim();
@@ -85,7 +86,10 @@ export async function getReportEmployeeIds(managerEmployeeId: string): Promise<s
 
   const visited = new Set<string>();
   const queue: string[] = (await prisma.user.findMany({
-    where: { managerId: manager.id },
+    where: {
+      managerId: manager.id,
+      ...reportDirectoryUserScope(),
+    },
     select: { employeeId: true },
   })).map((r) => r.employeeId);
 
@@ -97,7 +101,10 @@ export async function getReportEmployeeIds(managerEmployeeId: string): Promise<s
     const nextManager = await prisma.user.findUnique({ where: { employeeId: current }, select: { id: true } });
     if (nextManager) {
       const reports = await prisma.user.findMany({
-        where: { managerId: nextManager.id },
+        where: {
+          managerId: nextManager.id,
+          ...reportDirectoryUserScope(),
+        },
         select: { employeeId: true },
       });
       for (const r of reports) queue.push(r.employeeId);

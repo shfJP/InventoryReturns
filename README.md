@@ -102,6 +102,7 @@ Open http://localhost:3000. Pilot auth uses `CURRENT_USER_EMPLOYEE_ID` (or first
 - **Canonical identity:** One row per trimmed employee code is selected. `MERGED_DUPLICATE` rows are excluded and the newest `last_paycom_sync_at` observation wins; lifecycle state and source key provide deterministic tie-breakers.
 - **State mapping:** `employee_status=A` with `state_status=ACTIVE` is active. `employee_status=T` with `state_status=OFFBOARDING` is terminated. `NEEDS_REVIEW` remains visible for follow-up.
 - **Target:** Every sync refreshes `DirectoryEmployeeState`, upserts the `User` table, rebuilds manager links, and marks missing directory-sourced users inactive.
+- **Manager views:** When the PostgreSQL directory is configured, report hierarchies use only canonical directory users. Active reports are always shown; inactive reports remain in operational views only while assigned or unresolved equipment still requires collection.
 - **Safety:** `DIRECTORY_SYNC_MIN_ROWS` aborts an unexpectedly small source read before stale target rows are removed.
 - **SSO:** Microsoft Entra remains the sign-in provider. SSO identities are matched case-insensitively against employee ID, UPN, and email, preferring the active, recently synced directory row when legacy UPN-based rows coexist. If `DIRECTORY_DATABASE_URL` is absent, Microsoft Graph remains the backward-compatible user/manager sync source.
 - **Operations:** Run manually from **Admin → Sync Directory** or enable startup/scheduled sync in **Settings → Sync automation**.
