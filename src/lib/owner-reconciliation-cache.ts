@@ -1,7 +1,7 @@
 import { prisma } from "./db";
 import { getOwnerReconciliationResult, type OwnerReconciliationResult } from "./owner-reconciliation";
 
-const KEY = "cache:ownerReconciliation:v1";
+const KEY = "cache:ownerReconciliation:v2";
 
 type CachedResult = {
   generatedAt: string;
