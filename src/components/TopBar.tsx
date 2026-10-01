@@ -1,11 +1,44 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signOut as nextAuthSignOut, useSession } from "next-auth/react";
 import { logout } from "@/lib/auth-session";
 import { formatPersonName } from "@/lib/display-name";
+
+type SyncSource = "entra" | "reftab" | "ninjaone";
+type SyncRunState = "idle" | "running" | "success" | "error";
+
+type SyncRunStatus = {
+  source: SyncSource;
+  state: SyncRunState;
+  lastStartedAt: string | null;
+  lastFinishedAt: string | null;
+  lastError: string | null;
+  lastResult: unknown | null;
+};
+
+type SyncStatusResponse = {
+  lastSyncedAt: string | null;
+  directorySyncedAt: string | null;
+  reftabSyncedAt: string | null;
+  entraSyncedAt: string | null;
+  ninjaOneSyncedAt: string | null;
+  entra?: SyncRunStatus;
+  reftab?: SyncRunStatus;
+  ninjaone?: SyncRunStatus;
+};
+
+const SYNC_SOURCES: Array<{
+  source: SyncSource;
+  label: string;
+  endpoint: string;
+}> = [
+  { source: "entra", label: "Directory", endpoint: "/api/admin/sync-entra" },
+  { source: "reftab", label: "Reftab", endpoint: "/api/admin/sync-reftab" },
+  { source: "ninjaone", label: "NinjaOne", endpoint: "/api/admin/sync-ninjaone" },
+];
 
 export default function TopBar({ onOpenNavigation }: { onOpenNavigation?: () => void }) {
   const router = useRouter();
@@ -13,21 +46,42 @@ export default function TopBar({ onOpenNavigation }: { onOpenNavigation?: () => 
   const [searchValue, setSearchValue] = useState("");
   const [helpOpen, setHelpOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [syncTime, setSyncTime] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<SyncStatusResponse | null>(null);
+  const [syncingSource, setSyncingSource] = useState<SyncSource | null>(null);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [, setRelativeTimeTick] = useState(0);
   const [ssoEnabled, setSsoEnabled] = useState(false);
   const [avatarFailed, setAvatarFailed] = useState(false);
   const helpRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
+  const syncRef = useRef<HTMLDivElement>(null);
 
   const userName = formatPersonName(session?.user?.name) || session?.user?.email || "User";
   const userInitial = userName.trim().charAt(0).toUpperCase() || "U";
   const avatarSrc = ssoEnabled ? "/api/me/avatar" : session?.user?.image ?? null;
+  const hasRunningSync = SYNC_SOURCES.some(({ source }) => syncStatus?.[source]?.state === "running");
+  const syncTime = formatRelativeTime(syncStatus?.lastSyncedAt);
+
+  const refreshSyncStatus = useCallback(async () => {
+    try {
+      const response = await fetch("/api/admin/sync-status", { cache: "no-store" });
+      if (!response.ok) return null;
+      const data = await response.json() as SyncStatusResponse;
+      setSyncStatus(data);
+      return data;
+    } catch {
+      return null;
+    }
+  }, []);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
       const target = e.target as Node;
       if (helpRef.current && !helpRef.current.contains(target)) setHelpOpen(false);
       if (notifRef.current && !notifRef.current.contains(target)) setNotificationsOpen(false);
+      if (syncRef.current && !syncRef.current.contains(target)) setSyncOpen(false);
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
@@ -41,19 +95,76 @@ export default function TopBar({ onOpenNavigation }: { onOpenNavigation?: () => 
   }, []);
 
   useEffect(() => {
-    fetch("/api/admin/sync-status")
-      .then((r) => r.ok ? r.json() : null)
+    let cancelled = false;
+
+    fetch("/api/me")
+      .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (!data) return;
-        const ts = data.lastSyncedAt;
-        if (ts) {
-          const d = new Date(ts);
-          const mins = Math.round((Date.now() - d.getTime()) / 60000);
-          setSyncTime(mins < 1 ? "Just now" : mins < 60 ? `${mins}m ago` : `${Math.round(mins / 60)}h ago`);
+        if (cancelled) return;
+        const admin = Boolean(data?.isAdmin);
+        setIsAdmin(admin);
+        if (admin) {
+          void refreshSyncStatus();
         }
       })
-      .catch(() => {});
-  }, []);
+      .catch(() => {
+        if (!cancelled) setIsAdmin(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshSyncStatus]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    const interval = window.setInterval(() => setRelativeTimeTick((tick) => tick + 1), 60_000);
+    return () => window.clearInterval(interval);
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin || !hasRunningSync) return;
+    const interval = window.setInterval(() => {
+      void refreshSyncStatus();
+    }, 5_000);
+    return () => window.clearInterval(interval);
+  }, [hasRunningSync, isAdmin, refreshSyncStatus]);
+
+  async function handleSync(source: SyncSource, label: string, endpoint: string) {
+    if (syncingSource || hasRunningSync) return;
+
+    setSyncingSource(source);
+    setSyncMessage(`Syncing ${label}…`);
+    setSyncStatus((current) => current ? {
+      ...current,
+      [source]: {
+        source,
+        state: "running",
+        lastStartedAt: new Date().toISOString(),
+        lastFinishedAt: current[source]?.lastFinishedAt ?? null,
+        lastError: null,
+        lastResult: current[source]?.lastResult ?? null,
+      },
+    } : current);
+
+    try {
+      const response = await fetch(endpoint, { method: "POST" });
+      const data = await readJsonResponse(response);
+      if (!response.ok) {
+        throw new Error(getErrorMessage(data) ?? `${label} sync failed`);
+      }
+
+      setSyncMessage(`${label} sync completed. Refreshing data…`);
+      await refreshSyncStatus();
+      router.refresh();
+      window.setTimeout(() => window.location.reload(), 600);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Network error";
+      setSyncMessage(`${label} sync failed: ${message}`);
+      await refreshSyncStatus();
+      setSyncingSource(null);
+    }
+  }
 
   function handleGlobalSearch(e: React.FormEvent) {
     e.preventDefault();
@@ -90,11 +201,78 @@ export default function TopBar({ onOpenNavigation }: { onOpenNavigation?: () => 
         </div>
       </form>
       <div className="flex shrink-0 items-center gap-1">
-        {syncTime && (
-          <span className="mr-2 hidden items-center gap-1.5 rounded-md bg-gray-50 px-2.5 py-1.5 text-xs text-[var(--muted)] xl:flex">
-            <SyncStatusIcon className="h-3.5 w-3.5" />
-            Last synced: {syncTime}
-          </span>
+        {isAdmin && (
+          <div className="relative" ref={syncRef}>
+            <button
+              type="button"
+              onClick={() => {
+                setSyncOpen((open) => !open);
+                setHelpOpen(false);
+                setNotificationsOpen(false);
+                setSyncMessage(null);
+                void refreshSyncStatus();
+              }}
+              className="mr-1 flex items-center gap-1.5 rounded-md bg-gray-50 px-2 py-2 text-xs text-[var(--muted)] transition hover:bg-gray-100 hover:text-[var(--text)]"
+              aria-label={`Data source sync. Last synced: ${syncTime}`}
+              aria-expanded={syncOpen}
+              aria-haspopup="menu"
+              title={`Data source sync — last synced: ${syncTime}`}
+            >
+              <SyncStatusIcon className={`h-4 w-4 ${syncIconClass(syncStatus, hasRunningSync)}`} />
+              <span className="hidden whitespace-nowrap sm:inline">Last synced: {syncTime}</span>
+              <ChevronDownIcon className={`hidden h-3.5 w-3.5 transition sm:block ${syncOpen ? "rotate-180" : ""}`} />
+            </button>
+            {syncOpen && (
+              <div
+                className="absolute right-0 top-full z-50 mt-1 w-80 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-lg"
+                role="menu"
+                aria-label="Data source sync"
+              >
+                <div className="border-b border-[var(--border)] px-4 py-3">
+                  <p className="text-sm font-semibold text-[var(--text)]">Data source sync</p>
+                  <p className="mt-0.5 text-xs text-[var(--muted)]">Run an on-demand refresh from a connected source.</p>
+                </div>
+                <div className="p-2">
+                  {SYNC_SOURCES.map(({ source, label, endpoint }) => {
+                    const status = syncStatus?.[source];
+                    const isRunning = syncingSource === source || status?.state === "running";
+                    const disabled = Boolean(syncingSource) || hasRunningSync;
+                    return (
+                      <button
+                        key={source}
+                        type="button"
+                        onClick={() => void handleSync(source, label, endpoint)}
+                        disabled={disabled}
+                        className="flex w-full items-center gap-3 rounded-md px-2.5 py-2.5 text-left transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        role="menuitem"
+                      >
+                        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${syncSourceIconClass(status?.state)}`}>
+                          <SyncStatusIcon className={`h-4 w-4 ${isRunning ? "animate-spin" : ""}`} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium text-[var(--text)]">Sync {label}</span>
+                          <span className={`block truncate text-xs ${status?.state === "error" ? "text-red-600" : "text-[var(--muted)]"}`}>
+                            {syncSourceSummary(status, source, syncStatus)}
+                          </span>
+                        </span>
+                        <span className="rounded-md border border-[var(--border)] px-2 py-1 text-xs font-medium text-[var(--text-secondary)]">
+                          {isRunning ? "Running" : "Run"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {syncMessage && (
+                  <div
+                    className={`border-t border-[var(--border)] px-4 py-2.5 text-xs ${syncMessage.includes("failed") ? "text-red-600" : "text-[var(--muted)]"}`}
+                    aria-live="polite"
+                  >
+                    {syncMessage}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         )}
         <Link
           href="/collection"
@@ -107,7 +285,7 @@ export default function TopBar({ onOpenNavigation }: { onOpenNavigation?: () => 
         <div className="relative hidden sm:block" ref={helpRef}>
           <button
             type="button"
-            onClick={() => { setHelpOpen((o) => !o); setNotificationsOpen(false); }}
+            onClick={() => { setHelpOpen((o) => !o); setNotificationsOpen(false); setSyncOpen(false); }}
             className="rounded-md p-2 text-[var(--text-secondary)] hover:bg-gray-100"
             aria-label="Help"
             title="Help"
@@ -126,7 +304,7 @@ export default function TopBar({ onOpenNavigation }: { onOpenNavigation?: () => 
         <div className="relative" ref={notifRef}>
           <button
             type="button"
-            onClick={() => { setNotificationsOpen((o) => !o); setHelpOpen(false); }}
+            onClick={() => { setNotificationsOpen((o) => !o); setHelpOpen(false); setSyncOpen(false); }}
             className="rounded-md p-2 text-[var(--text-secondary)] hover:bg-gray-100"
             aria-label="Notifications"
             title="Notifications"
@@ -222,6 +400,14 @@ function SyncStatusIcon({ className }: { className?: string }) {
   );
 }
 
+function ChevronDownIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+    </svg>
+  );
+}
+
 function SettingsIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -229,4 +415,77 @@ function SettingsIcon({ className }: { className?: string }) {
       <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
     </svg>
   );
+}
+
+async function readJsonResponse(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+function getErrorMessage(value: unknown): string | null {
+  if (!value || typeof value !== "object" || !("error" in value)) return null;
+  return typeof value.error === "string" ? value.error : null;
+}
+
+function formatRelativeTime(value: string | null | undefined): string {
+  if (!value) return "Never";
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return "Unknown";
+
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60_000));
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function formatSyncDateTime(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  return new Intl.DateTimeFormat("en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(date);
+}
+
+function syncTimestamp(source: SyncSource, status: SyncStatusResponse | null): string | null {
+  if (!status) return null;
+  if (source === "entra") return status.directorySyncedAt ?? status.entraSyncedAt;
+  if (source === "reftab") return status.reftabSyncedAt;
+  return status.ninjaOneSyncedAt;
+}
+
+function syncSourceSummary(
+  run: SyncRunStatus | undefined,
+  source: SyncSource,
+  status: SyncStatusResponse | null,
+): string {
+  if (run?.state === "running") return `Started ${formatSyncDateTime(run.lastStartedAt) ?? "recently"}`;
+  if (run?.state === "error") return run.lastError ?? "Last sync failed";
+
+  const completedAt = run?.lastFinishedAt ?? syncTimestamp(source, status);
+  const formatted = formatSyncDateTime(completedAt);
+  return formatted ? `Last synced ${formatted}` : "Not synced yet";
+}
+
+function syncIconClass(status: SyncStatusResponse | null, hasRunningSync: boolean): string {
+  if (hasRunningSync) return "animate-spin text-amber-500";
+  if (SYNC_SOURCES.some(({ source }) => status?.[source]?.state === "error")) return "text-red-600";
+  return status?.lastSyncedAt ? "text-emerald-600" : "text-[var(--muted)]";
+}
+
+function syncSourceIconClass(state: SyncRunState | undefined): string {
+  if (state === "running") return "bg-amber-50 text-amber-600";
+  if (state === "error") return "bg-red-50 text-red-600";
+  if (state === "success") return "bg-emerald-50 text-emerald-600";
+  return "bg-gray-100 text-[var(--muted)]";
 }
