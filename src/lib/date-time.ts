@@ -17,9 +17,13 @@ export function formatContactTimestamp(
   if (!value) return unavailable;
 
   const trimmed = value.trim();
-  const numeric = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
+  // NinjaOne can return Unix seconds with a fractional component
+  // (for example, "1790870763.86") instead of an ISO timestamp.
+  const numeric = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(trimmed)
+    ? Number(trimmed)
+    : NaN;
   const date = Number.isFinite(numeric)
-    ? new Date(numeric < 10_000_000_000 ? numeric * 1000 : numeric)
+    ? new Date(Math.abs(numeric) < 10_000_000_000 ? numeric * 1000 : numeric)
     : new Date(trimmed);
 
   if (Number.isNaN(date.getTime())) return value;
