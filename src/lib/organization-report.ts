@@ -24,6 +24,10 @@ export type OrganizationReport = {
   totals: OrganizationReportRow;
 };
 
+function isInactiveDepartment(department: string | null | undefined): boolean {
+  return /^\(inactive\)/i.test(department?.trim() ?? "");
+}
+
 export async function getOrganizationReport(
   groupBy: OrganizationGroupBy,
   filters: { division?: string | null; department?: string | null } = {},
@@ -74,6 +78,8 @@ export async function getOrganizationReport(
         }),
   ]);
 
+  const visibleUsers = organizationUsers.filter((user) => !isInactiveDepartment(user.department));
+  const visibleAssignments = assignments.filter((assignment) => !isInactiveDepartment(assignment.user?.department));
   const categoryMap = new Map(categoryValues.map((item) => [item.category.trim().toLowerCase(), item.estimatedValueCents]));
   const groups = new Map<string, OrganizationReportRow>();
   const employeesByGroup = new Map<string, Set<string>>();
@@ -97,7 +103,7 @@ export async function getOrganizationReport(
     return created;
   }
 
-  for (const user of organizationUsers) {
+  for (const user of visibleUsers) {
     const organization = user[groupBy]?.trim() || "Unassigned";
     const row = rowFor(organization);
     const employees = employeesByGroup.get(organization)!;
@@ -109,7 +115,7 @@ export async function getOrganizationReport(
     }
   }
 
-  for (const assignment of assignments) {
+  for (const assignment of visibleAssignments) {
     const organization = assignment.user?.[groupBy]?.trim() || "Unassigned";
     const row = rowFor(organization);
     const categoryFallback = categoryMap.get(assignment.catName?.trim().toLowerCase() ?? "") ?? 0;
@@ -124,7 +130,7 @@ export async function getOrganizationReport(
 
   const rows = Array.from(groups.values()).sort((a, b) => b.replacementValueCents - a.replacementValueCents || a.organization.localeCompare(b.organization));
   const unique = (key: OrganizationGroupBy) =>
-    Array.from(new Set(organizationUsers.map((user) => user[key]).filter((value): value is string => Boolean(value)))).sort();
+    Array.from(new Set(visibleUsers.map((user) => user[key]).filter((value): value is string => Boolean(value)))).sort();
   const totals = rows.reduce<OrganizationReportRow>((sum, row) => ({
     organization: "All organizations",
     employeeCount: sum.employeeCount + row.employeeCount,
