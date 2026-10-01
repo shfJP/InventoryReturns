@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getCurrentEmployeeId } from "@/lib/auth";
+import { requireCapability } from "@/lib/access-control";
 import { prisma } from "@/lib/db";
 
 const bodySchema = z.object({ eventId: z.string().min(1) });
@@ -8,10 +8,11 @@ const bodySchema = z.object({ eventId: z.string().min(1) });
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
-  const employeeId = await getCurrentEmployeeId();
-  if (!employeeId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const access = await requireCapability(req, "canCloseOut");
+  if (!access) {
+    return NextResponse.json({ error: "Forbidden: IT or administrator access is required" }, { status: 403 });
   }
+  const employeeId = access.user.employeeId;
   const user = await prisma.user.findUnique({
     where: { employeeId },
     select: { id: true },
@@ -33,6 +34,9 @@ export async function POST(req: NextRequest) {
   }
   if (event.status === "CLOSED_OUT") {
     return NextResponse.json({ error: "Already closed out" }, { status: 400 });
+  }
+  if (event.status !== "COLLECTED_PENDING_IT") {
+    return NextResponse.json({ error: `Cannot close an event in ${event.status} status` }, { status: 409 });
   }
 
   await prisma.collectionEvent.update({

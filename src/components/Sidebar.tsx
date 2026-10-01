@@ -5,9 +5,11 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 
 const mainNav = [
+  { href: "/modules", label: "Modules", icon: LayoutIcon },
   { href: "/", label: "Dashboard", icon: DashboardIcon },
   { href: "/choose-view", label: "Switch view", icon: LayoutIcon },
   { href: "/collection", label: "Collection log", icon: CollectionIcon },
+  { href: "/corrections", label: "Corrections", icon: CollectionIcon },
 ];
 
 const reportNav = [
@@ -21,11 +23,12 @@ const reportNav = [
 type SyncState = "unknown" | "good" | "syncing" | "error";
 type SyncSource = "entra" | "reftab" | "ninjaone";
 
-export default function Sidebar() {
+export default function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: boolean; onClose?: () => void }) {
   const pathname = usePathname();
   const router = useRouter();
   const isPublic = pathname === "/login";
   const [isAdmin, setIsAdmin] = useState(false);
+  const [modules, setModules] = useState<string[]>(["equipment", "account-remediation"]);
   const [syncStates, setSyncStates] = useState<Record<SyncSource, SyncState>>({
     entra: "unknown",
     reftab: "unknown",
@@ -40,7 +43,10 @@ export default function Sidebar() {
 
     fetch("/api/me")
       .then((res) => (res.ok ? res.json() : null))
-      .then((data) => setIsAdmin(Boolean(data?.isAdmin)))
+      .then((data) => {
+        setIsAdmin(Boolean(data?.isAdmin));
+        setModules(Array.isArray(data?.modules) ? data.modules : ["equipment", "account-remediation"]);
+      })
       .catch(() => setIsAdmin(false));
   }, [isPublic]);
 
@@ -90,8 +96,10 @@ export default function Sidebar() {
   }, [isAdmin, router, syncStates]);
 
   return (
+    <>
+    {mobileOpen && <button type="button" aria-label="Close navigation" className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={onClose} />}
     <aside
-      className="fixed left-0 top-0 z-30 flex h-full w-[var(--sidebar-width)] flex-col border-r border-[var(--border)] bg-[var(--sidebar-bg)]"
+      className={`fixed left-0 top-0 z-40 flex h-full w-[var(--sidebar-width)] flex-col border-r border-[var(--border)] bg-[var(--sidebar-bg)] transition-transform md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}
       style={{ width: "var(--sidebar-width)" }}
     >
       <div className="flex h-16 items-center gap-2 border-b border-[var(--border)] px-4">
@@ -111,6 +119,7 @@ export default function Sidebar() {
               <Link
                 key={href}
                 href={href}
+                onClick={onClose}
                 className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
                   active
                     ? "bg-[var(--accent)] text-white"
@@ -133,6 +142,7 @@ export default function Sidebar() {
               <Link
                 key={href}
                 href={href}
+                onClick={onClose}
                 className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
                   active
                     ? "bg-[var(--accent)] text-white"
@@ -160,6 +170,7 @@ export default function Sidebar() {
                   window.location.reload();
                 }}
               />
+              <AdminActionButton label="Sync Snowflake" endpoint="/api/admin/sync-snowflake" />
               <SyncButton
                 label="Sync Reftab"
                 endpoint="/api/admin/sync-reftab"
@@ -180,22 +191,29 @@ export default function Sidebar() {
                   window.location.reload();
                 }}
               />
-              <AdminLink href="/admin/asset-values" label="Asset Values" active={pathname === "/admin/asset-values"} />
-              <AdminLink href="/admin/directory" label="Directory" active={pathname === "/admin/directory"} />
-              <AdminLink href="/admin/owner-reconciliation" label="Owner Reconcile" active={pathname === "/admin/owner-reconciliation"} />
-              <AdminLink href="/admin/reftab-usage" label="Reftab Usage" active={pathname === "/admin/reftab-usage"} />
+              <AdminLink href="/admin/asset-values" label="Asset Values" active={pathname === "/admin/asset-values"} onClose={onClose} />
+              <AdminLink href="/admin/asset-valuations" label="Asset Valuations" active={pathname === "/admin/asset-valuations"} onClose={onClose} />
+              <AdminLink href="/admin/directory" label="Directory" active={pathname === "/admin/directory"} onClose={onClose} />
+              <AdminLink href="/admin/reftab-usage" label="Reftab Usage" active={pathname === "/admin/reftab-usage"} onClose={onClose} />
+              <AdminLink href="/admin/return-workflow" label="Return Workflow" active={pathname === "/admin/return-workflow"} onClose={onClose} />
+              <AdminLink href="/admin/rollout" label="Rollout Readiness" active={pathname === "/admin/rollout"} onClose={onClose} />
             </>
           )}
+          {modules.includes("reconciliation") && <AdminLink href="/admin/owner-reconciliation" label="Owner Reconcile" active={pathname === "/admin/owner-reconciliation"} onClose={onClose} />}
+          {modules.includes("organization-analytics") && <AdminLink href="/reports/organization" label="Organization Analytics" active={pathname === "/reports/organization"} onClose={onClose} />}
+          {modules.includes("account-remediation") && <AdminLink href="/modules/account-remediation" label="Account Remediation" active={pathname === "/modules/account-remediation"} onClose={onClose} />}
         </nav>
       )}
     </aside>
+    </>
   );
 }
 
-function AdminLink({ href, label, active }: { href: string; label: string; active: boolean }) {
+function AdminLink({ href, label, active, onClose }: { href: string; label: string; active: boolean; onClose?: () => void }) {
   return (
     <Link
       href={href}
+      onClick={onClose}
       className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
         active
           ? "bg-[var(--accent)] text-white"
@@ -266,6 +284,25 @@ function SyncButton({
       <span>{label}</span>
     </button>
   );
+}
+
+function AdminActionButton({ label, endpoint }: { label: string; endpoint: string }) {
+  const [running, setRunning] = useState(false);
+  const handleClick = async () => {
+    setRunning(true);
+    try {
+      const response = await fetch(endpoint, { method: "POST" });
+      const data = await response.json();
+      alert(response.ok ? `${label} completed: ${JSON.stringify(data)}` : `${label} failed: ${data.error ?? "Unknown error"}`);
+    } catch {
+      alert(`${label} failed: Network error`);
+    } finally {
+      setRunning(false);
+    }
+  };
+  return <button type="button" onClick={handleClick} disabled={running} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-[var(--text-secondary)] hover:bg-gray-200 disabled:opacity-50">
+    <SyncIcon className={`h-4 w-4 ${running ? "animate-spin text-amber-500" : "text-[var(--muted)]"}`} /><span>{running ? "Syncing Snowflake" : label}</span>
+  </button>;
 }
 
 function BoxIcon({ className }: { className?: string }) {

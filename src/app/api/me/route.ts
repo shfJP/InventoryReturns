@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { isCurrentUserAdmin } from "@/lib/admin-auth";
+import { getAccessProfile } from "@/lib/access-control";
 
 /** Avoid DB access during `next build` (Coolify/Nixpacks has no migrated schema yet). */
 export const dynamic = "force-dynamic";
@@ -11,6 +11,17 @@ export async function GET(req: NextRequest) {
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const isAdmin = await isCurrentUserAdmin(req);
-  return NextResponse.json({ ...user, isAdmin });
+  const access = await getAccessProfile(req);
+  return NextResponse.json({
+    ...user,
+    isAdmin: access?.isAdmin ?? false,
+    roles: access?.roles ?? [],
+    modules: access?.modules ?? ["equipment"],
+    permissions: {
+      canCloseOut: access?.canCloseOut ?? false,
+      canReconcile: access?.canReconcile ?? false,
+      canViewOrganizationAnalytics: access?.canViewOrganizationAnalytics ?? false,
+      canManageAccountRemediation: access?.canManageAccountRemediation ?? false,
+    },
+  });
 }

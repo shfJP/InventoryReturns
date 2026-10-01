@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { authOptions, isSSOConfigured } from "./auth-options";
 import { prisma } from "./db";
 import { reportDirectoryUserScope } from "./report-directory";
+import { isPilotAccessAllowed } from "./access-config";
 
 const MANAGER_IDS = (process.env.MANAGER_EMPLOYEE_IDS ?? "EMP001,EMP002").split(",").map((s) => s.trim());
 const CURRENT_OVERRIDE = process.env.CURRENT_USER_EMPLOYEE_ID?.trim();
@@ -45,7 +46,7 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
       ],
       select: { employeeId: true, displayName: true, email: true, isManager: true },
     });
-    if (!user) return null;
+    if (!user || !isPilotAccessAllowed(user.employeeId)) return null;
     return {
       employeeId: user.employeeId,
       displayName: user.displayName,
@@ -61,7 +62,7 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
     where: { employeeId },
     select: { employeeId: true, displayName: true, email: true, isManager: true },
   });
-  if (!user) return null;
+  if (!user || !isPilotAccessAllowed(user.employeeId)) return null;
   return {
     employeeId: user.employeeId,
     displayName: user.displayName,

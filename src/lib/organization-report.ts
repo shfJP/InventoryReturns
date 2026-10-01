@@ -1,0 +1,152 @@
+import { prisma } from "./db";
+
+export type OrganizationGroupBy = "division" | "department" | "subdivision";
+
+export type OrganizationReportRow = {
+  organization: string;
+  employeeCount: number;
+  activeEmployeeCount: number;
+  inactiveEmployeeCount: number;
+  assetCount: number;
+  purchaseValueCents: number;
+  replacementValueCents: number;
+  bookValueCents: number;
+};
+
+export type OrganizationReport = {
+  generatedAt: string;
+  groupBy: OrganizationGroupBy;
+  rows: OrganizationReportRow[];
+  filters: {
+    divisions: string[];
+    departments: string[];
+    subdivisions: string[];
+  };
+  totals: OrganizationReportRow;
+};
+
+export async function getOrganizationReport(
+  groupBy: OrganizationGroupBy,
+  filters: { division?: string | null; department?: string | null; subdivision?: string | null } = {},
+): Promise<OrganizationReport> {
+  const [assignments, categoryValues, organizationUsers] = await Promise.all([
+    prisma.equipmentAssignment.findMany({
+      where: {
+        user: {
+          division: filters.division || undefined,
+          department: filters.department || undefined,
+          subdivision: filters.subdivision || undefined,
+        },
+      },
+      include: {
+        user: {
+          select: {
+            employeeId: true,
+            isActive: true,
+            division: true,
+            department: true,
+            subdivision: true,
+          },
+        },
+      },
+    }),
+    prisma.assetCategoryValue.findMany(),
+    prisma.user.findMany({
+      where: {
+        division: filters.division || undefined,
+        department: filters.department || undefined,
+        subdivision: filters.subdivision || undefined,
+      },
+      select: {
+        employeeId: true,
+        isActive: true,
+        division: true,
+        department: true,
+        subdivision: true,
+      },
+    }),
+  ]);
+
+  const categoryMap = new Map(categoryValues.map((item) => [item.category.trim().toLowerCase(), item.estimatedValueCents]));
+  const groups = new Map<string, OrganizationReportRow>();
+  const employeesByGroup = new Map<string, Set<string>>();
+
+  function rowFor(value: string | null | undefined): OrganizationReportRow {
+    const organization = value?.trim() || "Unassigned";
+    const existing = groups.get(organization);
+    if (existing) return existing;
+    const created: OrganizationReportRow = {
+      organization,
+      employeeCount: 0,
+      activeEmployeeCount: 0,
+      inactiveEmployeeCount: 0,
+      assetCount: 0,
+      purchaseValueCents: 0,
+      replacementValueCents: 0,
+      bookValueCents: 0,
+    };
+    groups.set(organization, created);
+    employeesByGroup.set(organization, new Set());
+    return created;
+  }
+
+  for (const user of organizationUsers) {
+    const organization = user[groupBy]?.trim() || "Unassigned";
+    const row = rowFor(organization);
+    const employees = employeesByGroup.get(organization)!;
+    if (!employees.has(user.employeeId)) {
+      employees.add(user.employeeId);
+      row.employeeCount += 1;
+      if (user.isActive) row.activeEmployeeCount += 1;
+      else row.inactiveEmployeeCount += 1;
+    }
+  }
+
+  for (const assignment of assignments) {
+    const organization = assignment.user?.[groupBy]?.trim() || "Unassigned";
+    const row = rowFor(organization);
+    const categoryFallback = categoryMap.get(assignment.catName?.trim().toLowerCase() ?? "") ?? 0;
+    const replacement = assignment.replacementValueCents ?? categoryFallback;
+    const purchase = assignment.purchaseValueCents ?? replacement;
+    const book = assignment.bookValueCents ?? replacement;
+    row.assetCount += 1;
+    row.purchaseValueCents += purchase;
+    row.replacementValueCents += replacement;
+    row.bookValueCents += book;
+  }
+
+  const rows = Array.from(groups.values()).sort((a, b) => b.replacementValueCents - a.replacementValueCents || a.organization.localeCompare(b.organization));
+  const unique = (key: OrganizationGroupBy) =>
+    Array.from(new Set(organizationUsers.map((user) => user[key]).filter((value): value is string => Boolean(value)))).sort();
+  const totals = rows.reduce<OrganizationReportRow>((sum, row) => ({
+    organization: "All organizations",
+    employeeCount: sum.employeeCount + row.employeeCount,
+    activeEmployeeCount: sum.activeEmployeeCount + row.activeEmployeeCount,
+    inactiveEmployeeCount: sum.inactiveEmployeeCount + row.inactiveEmployeeCount,
+    assetCount: sum.assetCount + row.assetCount,
+    purchaseValueCents: sum.purchaseValueCents + row.purchaseValueCents,
+    replacementValueCents: sum.replacementValueCents + row.replacementValueCents,
+    bookValueCents: sum.bookValueCents + row.bookValueCents,
+  }), {
+    organization: "All organizations",
+    employeeCount: 0,
+    activeEmployeeCount: 0,
+    inactiveEmployeeCount: 0,
+    assetCount: 0,
+    purchaseValueCents: 0,
+    replacementValueCents: 0,
+    bookValueCents: 0,
+  });
+
+  return {
+    generatedAt: new Date().toISOString(),
+    groupBy,
+    rows,
+    totals,
+    filters: {
+      divisions: unique("division"),
+      departments: unique("department"),
+      subdivisions: unique("subdivision"),
+    },
+  };
+}

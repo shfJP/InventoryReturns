@@ -1,10 +1,15 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getAllSyncRunStatuses, getSyncDaemonStatus } from "@/lib/sync-status";
+import { isCurrentUserAdmin } from "@/lib/admin-auth";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  if (!(await isCurrentUserAdmin(req))) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const [latestEquipment, latestUser, latestNinjaOneDevice, runStatus, daemon] = await Promise.all([
     prisma.equipmentAssignment.findFirst({
       where: { lastSyncedAt: { not: null } },

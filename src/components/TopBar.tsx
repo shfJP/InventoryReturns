@@ -7,7 +7,14 @@ import { signOut as nextAuthSignOut, useSession } from "next-auth/react";
 import { logout } from "@/lib/auth-session";
 import { formatPersonName } from "@/lib/display-name";
 
-export default function TopBar() {
+const moduleDestinations: Record<string, { label: string; href: string }> = {
+  equipment: { label: "Equipment returns", href: "/" },
+  reconciliation: { label: "Inventory reconciliation", href: "/admin/owner-reconciliation" },
+  "organization-analytics": { label: "Organization analytics", href: "/reports/organization" },
+  "account-remediation": { label: "Account remediation", href: "/modules/account-remediation" },
+};
+
+export default function TopBar({ onOpenNavigation }: { onOpenNavigation?: () => void }) {
   const router = useRouter();
   const { data: session } = useSession();
   const [searchValue, setSearchValue] = useState("");
@@ -16,6 +23,7 @@ export default function TopBar() {
   const [syncTime, setSyncTime] = useState<string | null>(null);
   const [ssoEnabled, setSsoEnabled] = useState(false);
   const [avatarFailed, setAvatarFailed] = useState(false);
+  const [modules, setModules] = useState<string[]>(["equipment", "account-remediation"]);
   const helpRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
 
@@ -31,6 +39,15 @@ export default function TopBar() {
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/me")
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (Array.isArray(data?.modules)) setModules(data.modules);
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -72,7 +89,23 @@ export default function TopBar() {
   }
 
   return (
-    <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-4 border-b border-[var(--border)] bg-[var(--header-bg)] px-6">
+    <header className="sticky top-0 z-20 flex min-h-14 items-center justify-between gap-2 border-b border-[var(--border)] bg-[var(--header-bg)] px-3 py-2 sm:px-5 xl:px-6">
+      <button type="button" onClick={onOpenNavigation} className="rounded-md p-2 text-[var(--text-secondary)] hover:bg-gray-100 md:hidden" aria-label="Open navigation">
+        <MenuIcon className="h-5 w-5" />
+      </button>
+      <select
+        aria-label="Select module"
+        defaultValue=""
+        onChange={(event) => {
+          const destination = moduleDestinations[event.target.value];
+          if (destination) router.push(destination.href);
+          event.target.value = "";
+        }}
+        className="hidden max-w-48 rounded-md border border-[var(--border)] bg-white px-2 py-1.5 text-xs font-medium text-[var(--text)] sm:block"
+      >
+        <option value="">Switch module…</option>
+        {modules.map((module) => <option key={module} value={module}>{moduleDestinations[module]?.label ?? module}</option>)}
+      </select>
       <form onSubmit={handleGlobalSearch} className="flex min-w-0 flex-1 items-center gap-4">
         <div className="relative w-full max-w-md">
           <SearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]" />
@@ -88,7 +121,7 @@ export default function TopBar() {
       </form>
       <div className="flex shrink-0 items-center gap-1">
         {syncTime && (
-          <span className="mr-2 flex items-center gap-1.5 rounded-md bg-gray-50 px-2.5 py-1.5 text-xs text-[var(--muted)]">
+          <span className="mr-2 hidden items-center gap-1.5 rounded-md bg-gray-50 px-2.5 py-1.5 text-xs text-[var(--muted)] xl:flex">
             <SyncStatusIcon className="h-3.5 w-3.5" />
             Last synced: {syncTime}
           </span>
@@ -101,7 +134,7 @@ export default function TopBar() {
         >
           <ClockIcon className="h-5 w-5" />
         </Link>
-        <div className="relative" ref={helpRef}>
+        <div className="relative hidden sm:block" ref={helpRef}>
           <button
             type="button"
             onClick={() => { setHelpOpen((o) => !o); setNotificationsOpen(false); }}
@@ -166,13 +199,17 @@ export default function TopBar() {
         <button
           type="button"
           onClick={handleSignOut}
-          className="ml-2 rounded-md px-3 py-1.5 text-sm text-[var(--text-secondary)] hover:bg-gray-100 hover:text-[var(--text)]"
+          className="ml-1 hidden rounded-md px-3 py-1.5 text-sm text-[var(--text-secondary)] hover:bg-gray-100 hover:text-[var(--text)] lg:block"
         >
           Sign out
         </button>
       </div>
     </header>
   );
+}
+
+function MenuIcon({ className }: { className?: string }) {
+  return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" /></svg>;
 }
 
 function SearchIcon({ className }: { className?: string }) {

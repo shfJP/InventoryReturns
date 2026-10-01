@@ -12,6 +12,9 @@ type TreeNode = {
   displayName: string;
   email: string;
   isActive: boolean;
+  division: string | null;
+  department: string | null;
+  subdivision: string | null;
   depth: number;
   assigned: number;
   collected: number;
@@ -106,22 +109,38 @@ export default function CascadeReportsPage() {
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [maxDepth, setMaxDepth] = useState(0); // 0 = unlimited
+  const [division, setDivision] = useState("");
+  const [department, setDepartment] = useState("");
+  const [subdivision, setSubdivision] = useState("");
+  const [filterOptions, setFilterOptions] = useState({
+    divisions: [] as string[],
+    departments: [] as string[],
+    subdivisions: [] as string[],
+  });
 
   useEffect(() => {
     if (!isLoggedIn()) { router.replace("/login"); return; }
     (async () => {
       try {
-        const url = maxDepth > 0 ? `/api/reports/cascade?depth=${maxDepth}` : "/api/reports/cascade";
+        setLoading(true);
+        const query = new URLSearchParams();
+        if (maxDepth > 0) query.set("depth", String(maxDepth));
+        if (division) query.set("division", division);
+        if (department) query.set("department", department);
+        if (subdivision) query.set("subdivision", subdivision);
+        const url = `/api/reports/cascade${query.size ? `?${query}` : ""}`;
         const res = await fetch(url);
         if (!res.ok) throw new Error("Failed to load");
-        setTree(await res.json());
+        const data = await res.json();
+        setTree(Array.isArray(data) ? data : data.tree ?? []);
+        if (!Array.isArray(data) && data.filters) setFilterOptions(data.filters);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load");
       } finally {
         setLoading(false);
       }
     })();
-  }, [router, maxDepth]);
+  }, [router, maxDepth, division, department, subdivision]);
 
   function toggle(id: string) {
     setExpanded((prev) => {
@@ -155,6 +174,9 @@ export default function CascadeReportsPage() {
       { header: "Email", value: (row) => row.email },
       { header: "Depth", value: (row) => row.depth },
       { header: "Active", value: (row) => row.isActive ? "Yes" : "No" },
+      { header: "Division", value: (row) => row.division },
+      { header: "Department", value: (row) => row.department },
+      { header: "Subdivision", value: (row) => row.subdivision },
       { header: "Assigned", value: (row) => row.assigned + row.collected },
       { header: "Collected", value: (row) => row.collected },
       { header: "Outstanding", value: (row) => row.outstanding },
@@ -205,6 +227,12 @@ export default function CascadeReportsPage() {
         </button>
       </div>
 
+      <div className="grid gap-3 rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm sm:grid-cols-3">
+        <OrganizationSelect label="Division" value={division} options={filterOptions.divisions} onChange={setDivision} />
+        <OrganizationSelect label="Department" value={department} options={filterOptions.departments} onChange={setDepartment} />
+        <OrganizationSelect label="Subdivision" value={subdivision} options={filterOptions.subdivisions} onChange={setSubdivision} />
+      </div>
+
       <div className="grid gap-4 sm:grid-cols-3">
         <div className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm">
           <p className="text-sm text-[var(--muted)]">Total Assigned</p>
@@ -220,7 +248,27 @@ export default function CascadeReportsPage() {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm">
+      <div className="grid gap-3 md:hidden">
+        {flattenedTree.map((node) => (
+          <article key={node.employeeId} className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm" style={{ marginLeft: `${Math.min(node.depth - 1, 3) * 8}px` }}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="font-semibold text-[var(--text)]">{formatPersonName(node.displayName)}</h2>
+                <p className="text-xs text-[var(--muted)]">Level {node.depth} · {node.employeeId}</p>
+              </div>
+              {!node.isActive && <span className="rounded-full bg-orange-50 px-2 py-0.5 text-xs text-orange-700">Inactive</span>}
+            </div>
+            <p className="mt-2 text-xs text-[var(--muted)]">{[node.division, node.department, node.subdivision].filter(Boolean).join(" · ") || "Organization not supplied"}</p>
+            <div className="mt-3 flex items-center justify-between text-sm">
+              <span>{node.assigned + node.collected} assigned</span>
+              <span className="text-amber-700">{node.outstanding} outstanding</span>
+              <Link href={`/staff/${encodeURIComponent(node.employeeId)}`} className="font-medium text-[var(--accent)]">View</Link>
+            </div>
+          </article>
+        ))}
+      </div>
+
+      <div className="hidden overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm md:block">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[600px]">
             <thead>
@@ -250,5 +298,17 @@ export default function CascadeReportsPage() {
         )}
       </div>
     </div>
+  );
+}
+
+function OrganizationSelect({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
+  return (
+    <label className="text-sm font-medium text-[var(--text)]">
+      {label}
+      <select value={value} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-white px-3 py-2 text-sm">
+        <option value="">All {label.toLowerCase()}s</option>
+        {options.map((option) => <option key={option} value={option}>{option}</option>)}
+      </select>
+    </label>
   );
 }

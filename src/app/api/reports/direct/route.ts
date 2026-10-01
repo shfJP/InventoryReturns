@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getCurrentEmployeeId } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import {
@@ -10,7 +10,11 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+function selected(req: NextRequest, name: string): string | null {
+  return req.nextUrl.searchParams.get(name)?.trim() || null;
+}
+
+export async function GET(req: NextRequest) {
   const managerId = await getCurrentEmployeeId();
   if (!managerId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -24,7 +28,7 @@ export async function GET() {
     return NextResponse.json({ error: "Manager not found" }, { status: 404 });
   }
 
-  const directReports = await prisma.user.findMany({
+  const allDirectReports = await prisma.user.findMany({
     where: {
       managerId: manager.id,
       ...reportDirectoryUserScope(),
@@ -34,9 +38,20 @@ export async function GET() {
       displayName: true,
       email: true,
       isActive: true,
+      division: true,
+      department: true,
+      subdivision: true,
     },
     orderBy: { displayName: "asc" },
   });
+  const division = selected(req, "division");
+  const department = selected(req, "department");
+  const subdivision = selected(req, "subdivision");
+  const directReports = allDirectReports.filter((report) =>
+    (!division || report.division === division) &&
+    (!department || report.department === department) &&
+    (!subdivision || report.subdivision === subdivision)
+  );
 
   const metricsByEmployee = await loadReportEquipmentMetrics(
     directReports.map((report) => report.employeeId),
@@ -59,5 +74,14 @@ export async function GET() {
       totalEverAssigned: report.totalEverAssigned,
     }));
 
-  return NextResponse.json(result);
+  const unique = (key: "division" | "department" | "subdivision") =>
+    Array.from(new Set(allDirectReports.map((row) => row[key]).filter((value): value is string => Boolean(value)))).sort();
+  return NextResponse.json({
+    items: result,
+    filters: {
+      divisions: unique("division"),
+      departments: unique("department"),
+      subdivisions: unique("subdivision"),
+    },
+  });
 }

@@ -2,8 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import Providers from "@/components/Providers";
-import Sidebar from "@/components/Sidebar";
-import TopBar from "@/components/TopBar";
+import AppShell from "@/components/AppShell";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-geist-sans" });
 
@@ -17,11 +16,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className={inter.variable}>
       <body className="min-h-screen font-sans">
         <Providers>
-          <Sidebar />
-          <div className="flex flex-1 flex-col pl-[var(--sidebar-width)]">
-            <TopBar />
-            <main className="flex-1 p-6">{children}</main>
-          </div>
+          <AppShell>{children}</AppShell>
         </Providers>
       </body>
     </html>

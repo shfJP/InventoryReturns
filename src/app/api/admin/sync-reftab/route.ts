@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 import { isCurrentUserAdmin } from "@/lib/admin-auth";
 import { syncReftabToDb } from "@/lib/ref-tab";
 import { markSyncFailed, markSyncFinished, markSyncStarted } from "@/lib/sync-status";
+import { invalidateOwnerReconciliationCache } from "@/lib/owner-reconciliation-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,7 @@ export async function POST(req: NextRequest) {
   try {
     await markSyncStarted("reftab");
     const result = await syncReftabToDb();
+    await invalidateOwnerReconciliationCache();
     await markSyncFinished("reftab", result);
     console.info(`[admin] Reftab sync requested; result=${JSON.stringify(result)}.`);
     return NextResponse.json({ ok: true, ...result });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { isLoggedIn } from "@/lib/auth-session";
@@ -72,6 +72,12 @@ type ApiResponse = {
     alreadyMatchedOwnerCount: number;
     mismatchCount: number;
   };
+  cache?: {
+    generatedAt: string;
+    expiresAt: string;
+    hit: boolean;
+  };
+  deferHours?: number;
 };
 
 const MISMATCH_PAGE_SIZE = 25;
@@ -167,27 +173,37 @@ export default function OwnerReconciliationPage() {
   const [categoryLoading, setCategoryLoading] = useState(false);
   const [selectedCategoryId, setSelectedCategoryId] = useState("");
   const [mismatchPage, setMismatchPage] = useState(1);
+  const [cache, setCache] = useState<ApiResponse["cache"] | null>(null);
+  const [deferHours, setDeferHours] = useState(24);
+
+  const load = useCallback(async (refresh = false) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/owner-reconciliation${refresh ? "?refresh=1" : ""}`);
+      const data = await readResponseJson(res);
+      if (!res.ok) throw new Error(responseErrorMessage(data, "Failed to load owner reconciliation"));
+      const response = data as ApiResponse;
+      setRows(response.rows);
+      setMissingReftabRows(response.missingReftabRows);
+      setSummary(response.summary);
+      setCache(response.cache ?? null);
+      setDeferHours(response.deferHours ?? 24);
+      if (refresh) setMessage("Reconciliation data recalculated.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to load owner reconciliation");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (!isLoggedIn()) {
       router.replace("/login");
       return;
     }
-
-    fetch("/api/admin/owner-reconciliation")
-      .then(async (res) => {
-        const data = await readResponseJson(res);
-        if (!res.ok) throw new Error(responseErrorMessage(data, "Failed to load owner reconciliation"));
-        return data as ApiResponse;
-      })
-      .then((data) => {
-        setRows(data.rows);
-        setMissingReftabRows(data.missingReftabRows);
-        setSummary(data.summary);
-      })
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load owner reconciliation"))
-      .finally(() => setLoading(false));
-  }, [router]);
+    void load();
+  }, [load, router]);
 
   const filteredRows = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -270,6 +286,40 @@ export default function OwnerReconciliationPage() {
     }
   }
 
+  async function recordDecision(row: OwnerReconciliationRow, decision: "NO" | "UNSURE" | "DEFER") {
+    const reason = window.prompt(
+      decision === "NO"
+        ? "Why does this equipment not belong to the suggested person?"
+        : decision === "UNSURE"
+          ? "What should IT investigate?"
+          : "Why is this review being deferred?",
+    );
+    if (reason === null) return;
+    setApprovingId(row.id);
+    setError(null);
+    setMessage(null);
+    try {
+      const { res, data } = await postJsonWithTimeout({
+        action: "record-decision",
+        assetTag: row.assetTag,
+        ninjaDeviceId: row.ninjaDevice.id,
+        decision,
+        reason,
+      });
+      if (!res.ok) throw new Error(responseErrorMessage(data, "Failed to record decision"));
+      setRows((previous) => previous.filter((item) => item.id !== row.id));
+      setMessage(
+        decision === "DEFER"
+          ? `${row.assetTag} review deferred.`
+          : `${row.assetTag} sent to the inventory correction queue.`,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to record decision");
+    } finally {
+      setApprovingId(null);
+    }
+  }
+
   async function submitMissing(row: MissingReftabAssetRow, categoryId?: string) {
     const owner = row.ninjaOwner;
     if (!owner?.isActive) return;
@@ -344,10 +394,11 @@ export default function OwnerReconciliationPage() {
 
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-[var(--text)]">Owner Reconciliation</h1>
+          <h1 className="text-2xl font-bold text-[var(--text)]">Active Employee Owner Reconciliation</h1>
           <p className="text-[var(--muted)]">{rows.length} owner mismatch{rows.length === 1 ? "" : "es"}, {missingReftabRows.length} missing from Reftab</p>
+          {cache && <p className="mt-1 text-xs text-[var(--muted)]">Calculated {new Date(cache.generatedAt).toLocaleString()} · {cache.hit ? "cached result" : "fresh result"} · deferred reviews return after {deferHours} hour(s)</p>}
         </div>
-        <div className="w-full max-w-sm">
+        <div className="flex w-full max-w-lg gap-2">
           <input
             type="search"
             value={query}
@@ -355,6 +406,9 @@ export default function OwnerReconciliationPage() {
             placeholder="Search"
             className="input-search"
           />
+          <button type="button" onClick={() => void load(true)} className="btn-secondary whitespace-nowrap">
+            Recalculate
+          </button>
         </div>
       </div>
 
@@ -426,14 +480,43 @@ export default function OwnerReconciliationPage() {
                   </td>
                   <td className="table-cell text-[var(--text-secondary)]">{formatDate(row.ninjaDevice.lastContact ?? row.ninjaDevice.lastUpdate)}</td>
                   <td className="table-cell">
-                    <button
-                      type="button"
-                      onClick={() => approve(row)}
-                      disabled={approvingId === row.id}
-                      className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-50"
-                    >
-                      {approvingId === row.id ? "Approving" : "Approve"}
-                    </button>
+                    <div className="flex flex-wrap gap-1">
+                      <button
+                        type="button"
+                        onClick={() => approve(row)}
+                        disabled={approvingId === row.id}
+                        className="rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                        title="Yes, assign this asset to the suggested person"
+                      >
+                        Yes
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => recordDecision(row, "NO")}
+                        disabled={approvingId === row.id}
+                        className="rounded-lg bg-red-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                        title="No, create an IT correction request"
+                      >
+                        No
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => recordDecision(row, "UNSURE")}
+                        disabled={approvingId === row.id}
+                        className="rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs font-medium text-[var(--text)] disabled:opacity-50"
+                      >
+                        Unsure
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => recordDecision(row, "DEFER")}
+                        disabled={approvingId === row.id}
+                        className="rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs font-medium text-[var(--muted)] disabled:opacity-50"
+                        title={`Hide this review for ${deferHours} hour(s)`}
+                      >
+                        Defer
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isCurrentUserAdmin } from "@/lib/admin-auth";
 import { isNinjaOneConfigured, syncNinjaOneToDb } from "@/lib/ninjaone";
 import { markSyncFailed, markSyncFinished, markSyncStarted } from "@/lib/sync-status";
+import { invalidateOwnerReconciliationCache } from "@/lib/owner-reconciliation-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,7 @@ export async function POST(req: NextRequest) {
   try {
     await markSyncStarted("ninjaone");
     const result = await syncNinjaOneToDb();
+    await invalidateOwnerReconciliationCache();
     await markSyncFinished("ninjaone", result);
     console.info(`[admin] NinjaOne sync requested; result=${JSON.stringify(result)}.`);
     return NextResponse.json({ ok: true, ...result });

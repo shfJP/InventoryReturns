@@ -3,6 +3,9 @@ export type Staff = {
   displayName: string;
   email: string;
   isActive?: boolean;
+  division?: string | null;
+  department?: string | null;
+  subdivision?: string | null;
 };
 
 export type Equipment = {

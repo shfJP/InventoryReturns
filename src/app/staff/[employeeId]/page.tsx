@@ -23,6 +23,14 @@ type Equipment = {
 
 type SortDirection = "asc" | "desc";
 type EquipmentSortKey = "title" | "catName" | "assetTag" | "serial" | "statusName";
+type ReturnRole = "supervisor" | "hr" | "it" | "designated";
+type ReturnWorkflow = {
+  defaultRecipientRole: ReturnRole;
+  enabledRecipientRoles: ReturnRole[];
+  designatedRecipientLabel: string;
+  returnInstructions: string;
+  requireLocation: boolean;
+};
 
 const equipmentColumns: Array<{ key: EquipmentSortKey; label: string }> = [
   { key: "title", label: "Assigned Equipment" },
@@ -93,6 +101,9 @@ export default function StaffDetailPage() {
   /** Shown after staff loaded; collect API failures were previously invisible. */
   const [actionError, setActionError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [returnWorkflow, setReturnWorkflow] = useState<ReturnWorkflow | null>(null);
+  const [returnRecipientRole, setReturnRecipientRole] = useState<ReturnRole>("it");
+  const [returnLocation, setReturnLocation] = useState("");
   const successTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -103,9 +114,10 @@ export default function StaffDetailPage() {
     if (!employeeId) return;
     (async () => {
       try {
-        const [staffRes, eqRes] = await Promise.all([
+        const [staffRes, eqRes, workflowRes] = await Promise.all([
           fetch("/api/staff"),
           fetch(`/api/equipment?employee_id=${encodeURIComponent(employeeId)}&include_collected=true`),
+          fetch("/api/return-workflow"),
         ]);
         if (!staffRes.ok) throw new Error("Unauthorized");
         const staffList = await staffRes.json();
@@ -117,6 +129,11 @@ export default function StaffDetailPage() {
         }
         setStaff(person);
         setEquipment(eqRes.ok ? await eqRes.json() : []);
+        if (workflowRes.ok) {
+          const workflow = await workflowRes.json() as ReturnWorkflow;
+          setReturnWorkflow(workflow);
+          setReturnRecipientRole(workflow.defaultRecipientRole);
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load");
       } finally {
@@ -149,15 +166,19 @@ export default function StaffDetailPage() {
           serial,
           assignedToEmployeeId: employeeId,
           notes: notes[assetTag] || undefined,
+          returnRecipientRole,
+          returnLocation: returnLocation || undefined,
         }),
       });
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
         throw new Error(data.error || res.statusText);
       }
       setEquipment((prev) => prev.filter((e) => e.assetTag !== assetTag));
       setNotes((prev) => ({ ...prev, [assetTag]: "" }));
-      const msg = `Marked ${assetTag} as collected. IT will be notified (if configured).`;
+      const msg = data.notificationSent
+        ? `Marked ${assetTag} as collected for ${returnRecipientRole}. IT was notified.`
+        : `Marked ${assetTag} as collected for ${returnRecipientRole}, but the IT notification failed. IT can retry it from the collection log.`;
       setSuccessMessage(msg);
       successTimeoutRef.current = setTimeout(() => {
         setSuccessMessage(null);
@@ -256,6 +277,23 @@ export default function StaffDetailPage() {
         </div>
       )}
 
+      {returnWorkflow && (
+        <section className="rounded-lg border border-[var(--border)] bg-[var(--table-header-bg)] p-4">
+          <h2 className="font-semibold text-[var(--text)]">Return handoff</h2>
+          <p className="mt-1 text-sm text-[var(--muted)]">{returnWorkflow.returnInstructions}</p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <label className="text-sm font-medium">Physical recipient
+              <select value={returnRecipientRole} onChange={(event) => setReturnRecipientRole(event.target.value as ReturnRole)} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-white px-3 py-2">
+                {returnWorkflow.enabledRecipientRoles.map((role) => <option key={role} value={role}>{role === "designated" ? returnWorkflow.designatedRecipientLabel : role === "hr" ? "Human Resources" : role.charAt(0).toUpperCase() + role.slice(1)}</option>)}
+              </select>
+            </label>
+            <label className="text-sm font-medium">Return location {returnWorkflow.requireLocation ? "*" : ""}
+              <input required={returnWorkflow.requireLocation} value={returnLocation} onChange={(event) => setReturnLocation(event.target.value)} placeholder="Office, site, room, or shipping location" className="mt-1 w-full rounded-lg border border-[var(--border)] bg-white px-3 py-2" />
+            </label>
+          </div>
+        </section>
+      )}
+
       <section className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -281,7 +319,20 @@ export default function StaffDetailPage() {
         {equipment.length === 0 ? (
           <p className="text-[var(--muted)]">No equipment listed for this employee.</p>
         ) : (
-          <div className="overflow-x-auto">
+          <>
+          <div className="grid gap-3 md:hidden">
+            {filteredEquipment.map((item) => (
+              <article key={`${item.assetTag}-${item.assignedToEmployeeId}`} className="rounded-lg border border-[var(--border)] p-4">
+                <div className="flex items-start justify-between gap-3"><div><h3 className="font-semibold">{equipmentTitle(item)}</h3><p className="text-xs text-[var(--muted)]">{item.assetTag} · {item.serial ?? "No serial"}</p></div><span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs">{item.statusName ?? "Assigned"}</span></div>
+                <input type="text" placeholder="Collection notes" className="mt-3 w-full rounded-lg border border-[var(--border)] px-3 py-2 text-sm" value={notes[item.assetTag] ?? ""} onChange={(event) => setNotes((previous) => ({ ...previous, [item.assetTag]: event.target.value }))} />
+                <div className="mt-3 flex gap-2">
+                  <button type="button" className="btn-success flex-1" disabled={collecting === item.assetTag || Boolean(returnWorkflow?.requireLocation && !returnLocation.trim())} onClick={() => markCollected(item.assetTag, item.serial)}>{collecting === item.assetTag ? "Marking…" : "Mark collected"}</button>
+                  <Link href={`/corrections?assetTag=${encodeURIComponent(item.assetTag)}&employeeId=${encodeURIComponent(employeeId)}`} className="btn-secondary">Report issue</Link>
+                </div>
+              </article>
+            ))}
+          </div>
+          <div className="hidden overflow-x-auto md:block">
             <table className="w-full min-w-[900px]">
               <thead>
                 <tr>
@@ -331,14 +382,19 @@ export default function StaffDetailPage() {
                       />
                     </td>
                     <td className="table-cell">
-                      <button
-                        type="button"
-                        className="whitespace-nowrap rounded-lg bg-[var(--success)] px-3 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
-                        disabled={collecting === e.assetTag}
-                        onClick={() => markCollected(e.assetTag, e.serial)}
-                      >
-                        {collecting === e.assetTag ? "Marking..." : "Mark collected"}
-                      </button>
+                      <div className="flex flex-col items-start gap-2">
+                        <button
+                          type="button"
+                          className="whitespace-nowrap rounded-lg bg-[var(--success)] px-3 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+                          disabled={collecting === e.assetTag || Boolean(returnWorkflow?.requireLocation && !returnLocation.trim())}
+                          onClick={() => markCollected(e.assetTag, e.serial)}
+                        >
+                          {collecting === e.assetTag ? "Marking..." : "Mark collected"}
+                        </button>
+                        <Link href={`/corrections?assetTag=${encodeURIComponent(e.assetTag)}&employeeId=${encodeURIComponent(employeeId)}`} className="text-xs font-medium text-[var(--accent)] hover:underline">
+                          Report issue
+                        </Link>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -348,6 +404,7 @@ export default function StaffDetailPage() {
               <p className="py-12 text-center text-[var(--muted)]">No equipment matches the current filter.</p>
             )}
           </div>
+          </>
         )}
       </section>
     </div>

@@ -8,32 +8,35 @@ datasource db {
 }
 
 model User {
-  id                String   @id @default(cuid())
-  employeeId        String   @unique
-  upn               String?
-  displayName       String
-  email             String
-  managerId         String?
-  manager           User?    @relation("ManagerReports", fields: [managerId], references: [id])
-  directReports     User[]   @relation("ManagerReports")
-  isManager         Boolean  @default(false)
-  isActive          Boolean  @default(true)
+  id                       String    @id @default(cuid())
+  employeeId               String    @unique
+  upn                      String?
+  displayName              String
+  email                    String
+  managerId                String?
+  manager                  User?     @relation("ManagerReports", fields: [managerId], references: [id])
+  directReports            User[]    @relation("ManagerReports")
+  isManager                Boolean   @default(false)
+  isActive                 Boolean   @default(true)
   directorySource          String?
   directorySourcePersonKey String?
   employmentStatus         String?
   directoryState           String?
+  division                 String?
+  department               String?
+  subdivision              String?
   terminationDate          DateTime?
-  lastSyncedAt      DateTime?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  lastSyncedAt             DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
   equipmentAssignments EquipmentAssignment[]
-  markedCollections    CollectionEvent[]  @relation("MarkedByManager")
-  closedOutEvents      CollectionEvent[]  @relation("ClosedOutByIT")
+  markedCollections    CollectionEvent[]     @relation("MarkedByManager")
+  closedOutEvents      CollectionEvent[]     @relation("ClosedOutByIT")
 }
 
 model DirectoryEmployeeState {
-  employeeId        String   @id
+  employeeId        String    @id
   sourcePersonKey   String
   displayName       String
   email             String?
@@ -41,6 +44,9 @@ model DirectoryEmployeeState {
   employmentStatus  String
   directoryState    String
   isActive          Boolean
+  division          String?
+  department        String?
+  subdivision       String?
   terminationDate   DateTime?
   sourceSyncedAt    DateTime?
   replicatedAt      DateTime
@@ -49,48 +55,55 @@ model DirectoryEmployeeState {
   @@index([directoryState])
   @@index([isActive])
   @@index([managerEmployeeId])
+  @@index([division])
+  @@index([department])
+  @@index([subdivision])
 }
 
 model EquipmentAssignment {
-  id                   String   @id @default(cuid())
-  assetTag             String
-  aid                  String?
-  serial               String?
-  model                String?
-  title                String?
-  catName              String?
-  locationName         String?
-  statusName           String?
-  detailsJson          String?
-  assignedToEmployeeId String
-  source               String   @default("ref_tab")
-  lastSyncedAt         DateTime?
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  id                    String            @id @default(cuid())
+  assetTag              String
+  aid                   String?
+  serial                String?
+  model                 String?
+  title                 String?
+  catName               String?
+  locationName          String?
+  statusName            String?
+  detailsJson           String?
+  purchaseValueCents    Int?
+  replacementValueCents Int?
+  bookValueCents        Int?
+  purchaseDate          DateTime?
+  assignedToEmployeeId  String
+  source                String            @default("ref_tab")
+  lastSyncedAt          DateTime?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  user                  User?             @relation(fields: [assignedToEmployeeId], references: [employeeId])
+  events                CollectionEvent[]
 
   @@unique([assetTag, assignedToEmployeeId])
-  user  User?  @relation(fields: [assignedToEmployeeId], references: [employeeId])
-  events CollectionEvent[]
 }
 
 model NinjaOneDevice {
-  id               String   @id
-  displayName      String?
-  systemName       String?
-  dnsName          String?
-  netbiosName      String?
-  organizationId   String?
-  locationId       String?
-  nodeClass        String?
-  approvalStatus   String?
-  offline          Boolean?
-  lastContact      String?
-  lastUpdate       String?
-  likelyUser       String?
-  detailsJson      String?
-  lastSyncedAt     DateTime?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id             String    @id
+  displayName    String?
+  systemName     String?
+  dnsName        String?
+  netbiosName    String?
+  organizationId String?
+  locationId     String?
+  nodeClass      String?
+  approvalStatus String?
+  offline        Boolean?
+  lastContact    String?
+  lastUpdate     String?
+  likelyUser     String?
+  detailsJson    String?
+  lastSyncedAt   DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   @@index([displayName])
   @@index([systemName])
@@ -98,50 +111,55 @@ model NinjaOneDevice {
 }
 
 model CollectionEvent {
-  id                            String   @id @default(cuid())
-  assetTag                      String
-  serial                        String?
-  assignedToEmployeeId          String
-  markedCollectedByManagerId    String
-  markedCollectedAt             DateTime @default(now())
-  notes                         String?
-  status                        String   @default("COLLECTED_PENDING_IT")
-  collectedByRole               String   @default("manager")
+  id                         String   @id @default(cuid())
+  assetTag                   String
+  serial                     String?
+  assignedToEmployeeId       String
+  markedCollectedByManagerId String
+  markedCollectedAt          DateTime @default(now())
+  notes                      String?
+  status                     String   @default("COLLECTED_PENDING_IT")
+  collectedByRole            String   @default("manager")
+  returnRecipientRole        String   @default("it")
+  returnLocation             String?
+  notificationStatus         String   @default("PENDING")
+  notificationReference      String?
+  notificationError          String?
 
-  closedOutAt                   DateTime?
-  closedOutByItEmployeeId       String?
+  closedOutAt             DateTime?
+  closedOutByItEmployeeId String?
 
-  equipmentAssignmentId         String?
-  equipmentAssignment           EquipmentAssignment? @relation(fields: [equipmentAssignmentId], references: [id])
-  markedByManager               User     @relation("MarkedByManager", fields: [markedCollectedByManagerId], references: [id])
-  closedOutByIt                 User?    @relation("ClosedOutByIT", fields: [closedOutByItEmployeeId], references: [id])
+  equipmentAssignmentId String?
+  equipmentAssignment   EquipmentAssignment? @relation(fields: [equipmentAssignmentId], references: [id])
+  markedByManager       User                 @relation("MarkedByManager", fields: [markedCollectedByManagerId], references: [id])
+  closedOutByIt         User?                @relation("ClosedOutByIT", fields: [closedOutByItEmployeeId], references: [id])
 
-  createdAt                     DateTime @default(now())
-  updatedAt                     DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model UnresolvedCollection {
-  id                       String   @id @default(cuid())
-  employeeId               String
-  employeeName             String
-  employeeEmail            String?
-  managerId                String?
-  managerEmployeeId        String?
-  managerName              String?
-  managerEmail             String?
-  assetTag                 String
-  catName                  String?
-  serial                   String?
-  model                    String?
-  source                   String   @default("entra_sync")
-  status                   String   @default("UNRESOLVED")
-  investigationNotes       String?
-  detectedAt               DateTime @default(now())
-  resolvedAt               DateTime?
-  createdAt                DateTime @default(now())
-  updatedAt                DateTime @updatedAt
+  id                 String    @id @default(cuid())
+  employeeId         String
+  employeeName       String
+  employeeEmail      String?
+  managerId          String?
+  managerEmployeeId  String?
+  managerName        String?
+  managerEmail       String?
+  assetTag           String
+  catName            String?
+  serial             String?
+  model              String?
+  source             String    @default("entra_sync")
+  status             String    @default("UNRESOLVED")
+  investigationNotes String?
+  detectedAt         DateTime  @default(now())
+  resolvedAt         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
-  auditEvents              UnresolvedCollectionAudit[]
+  auditEvents UnresolvedCollectionAudit[]
 
   @@unique([employeeId, assetTag, status])
 }
@@ -158,7 +176,7 @@ model UnresolvedCollectionAudit {
   actorEmail             String?
   createdAt              DateTime @default(now())
 
-  unresolvedCollection   UnresolvedCollection @relation(fields: [unresolvedCollectionId], references: [id], onDelete: Cascade)
+  unresolvedCollection UnresolvedCollection @relation(fields: [unresolvedCollectionId], references: [id], onDelete: Cascade)
 }
 
 model AppSetting {
@@ -173,4 +191,111 @@ model AssetCategoryValue {
   estimatedValueCents Int      @default(0)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
+}
+
+model ReconciliationDecision {
+  id                      String   @id @default(cuid())
+  assetTag                String
+  ninjaDeviceId           String
+  currentOwnerEmployeeId  String?
+  proposedOwnerEmployeeId String?
+  decision                String
+  reason                  String?
+  notes                   String?
+  decidedByEmployeeId     String
+  decidedByName           String?
+  correctionRequestId     String?
+  createdAt               DateTime @default(now())
+
+  @@index([assetTag, ninjaDeviceId])
+  @@index([decision])
+  @@index([createdAt])
+}
+
+model CorrectionRequest {
+  id                      String    @id @default(cuid())
+  requestType             String    @default("EQUIPMENT_OWNERSHIP")
+  source                  String    @default("portal")
+  assetTag                String?
+  subjectEmployeeId       String?
+  currentOwnerEmployeeId  String?
+  proposedOwnerEmployeeId String?
+  ninjaDeviceId           String?
+  reason                  String
+  details                 String?
+  status                  String    @default("OPEN")
+  priority                String    @default("NORMAL")
+  requesterEmployeeId     String
+  requesterName           String?
+  requesterEmail          String?
+  assignedToEmployeeId    String?
+  resolutionNotes         String?
+  resolvedByEmployeeId    String?
+  resolvedAt              DateTime?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  auditEvents CorrectionRequestAudit[]
+
+  @@index([status, createdAt])
+  @@index([assetTag])
+  @@index([subjectEmployeeId])
+  @@index([requesterEmployeeId])
+}
+
+model CorrectionRequestAudit {
+  id                  String   @id @default(cuid())
+  correctionRequestId String
+  action              String
+  oldStatus           String?
+  newStatus           String?
+  note                String?
+  actorEmployeeId     String
+  actorName           String?
+  createdAt           DateTime @default(now())
+
+  correctionRequest CorrectionRequest @relation(fields: [correctionRequestId], references: [id], onDelete: Cascade)
+
+  @@index([correctionRequestId, createdAt])
+}
+
+model AccountRemediation {
+  id                   String    @id @default(cuid())
+  employeeId           String
+  employeeName         String?
+  system               String
+  issueType            String
+  description          String
+  status               String    @default("OPEN")
+  priority             String    @default("NORMAL")
+  requesterEmployeeId  String
+  requesterName        String?
+  assignedToEmployeeId String?
+  resolutionNotes      String?
+  resolvedByEmployeeId String?
+  resolvedAt           DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  auditEvents AccountRemediationAudit[]
+
+  @@index([status, createdAt])
+  @@index([employeeId])
+  @@index([requesterEmployeeId])
+}
+
+model AccountRemediationAudit {
+  id                   String   @id @default(cuid())
+  accountRemediationId String
+  action               String
+  oldStatus            String?
+  newStatus            String?
+  note                 String?
+  actorEmployeeId      String
+  actorName            String?
+  createdAt            DateTime @default(now())
+
+  accountRemediation AccountRemediation @relation(fields: [accountRemediationId], references: [id], onDelete: Cascade)
+
+  @@index([accountRemediationId, createdAt])
 }

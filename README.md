@@ -20,7 +20,10 @@ The deliverable document also describes capabilities outside the web UI (APIs, d
 
 ## Is it ready to run? (API, Coolify, Docker)
 
-**API & app:** Yes. The Next.js app and all API routes (`/api/me`, `/api/staff`, `/api/equipment`, `/api/collect`, `/api/collection`, `/api/closeout`) are implemented and run as soon as the app starts.
+**API & app:** Yes. The Next.js app includes manager reporting, collection and
+IT close-out, active-owner reconciliation, correction queues, account
+remediation, organization/value reporting, rollout controls, and their API
+routes.
 
 **Coolify / Nixpacks:** Yes. The repo includes `nixpacks.toml`; Coolify can build with Nixpacks (or use the Dockerfile). Build runs `npm ci`, `prisma generate`, `npm run build`; start runs `sh start.sh`, which pushes the Prisma schema and starts the background sync worker. Set all env vars from `.env.example` in Coolify.
 
@@ -33,10 +36,10 @@ Server-side routes (`/api/collect`, `/api/staff`, `/api/equipment`, etc.) resolv
 | Variable | Required | Notes |
 |----------|----------|--------|
 | `DATABASE_URL` | Yes | Must point to a DB where `prisma db push` (and ideally seed or your AD sync) has run so `User` rows exist. |
-| `MANAGER_EMPLOYEE_IDS` | Yes (pilot) | Comma-separated employee IDs allowed as managers (e.g. `EMP001,EMP002`). Each ID should exist in `User.employeeId`. |
-| `CURRENT_USER_EMPLOYEE_ID` | No | If set, that user is the “logged in” manager for all API calls. Must be one of `MANAGER_EMPLOYEE_IDS` and must exist in the DB. If unset, the **first** value in `MANAGER_EMPLOYEE_IDS` is used. |
+| `MANAGER_EMPLOYEE_IDS` | Yes (pilot) | Comma-separated pilot identities; the first existing ID is the login fallback when no current-user override is set. Manager status and report scope come from the directory hierarchy. |
+| `CURRENT_USER_EMPLOYEE_ID` | No | If set, that existing `User.employeeId` is the current pilot user for all API calls. If unset, the **first** value in `MANAGER_EMPLOYEE_IDS` is used. |
 
-**Checklist:** In Coolify, set `MANAGER_EMPLOYEE_IDS` (and optionally `CURRENT_USER_EMPLOYEE_ID`) to IDs that actually exist in your deployed database. Default seed uses `EMP001`–`EMP025`; production AD sync should use your real IDs.
+**Checklist:** In Coolify, set `MANAGER_EMPLOYEE_IDS` (and optionally `CURRENT_USER_EMPLOYEE_ID`) to IDs that actually exist in your deployed database. Default seed uses `EMP001`–`EMP025`; production directory sync should use your real IDs.
 
 ---
 
@@ -47,13 +50,87 @@ Once you set env vars (from `.env.example`) and run the app with a migrated (and
 | What you configure | What works |
 |--------------------|------------|
 | **Minimum:** `DATABASE_URL` + `MANAGER_EMPLOYEE_IDS` (and you’ve run `prisma db push` + `db:seed`) | App runs. Manager can log in (pilot: first manager in list or `CURRENT_USER_EMPLOYEE_ID`). Staff list (from DB), equipment from **seed/cache only**, mark collected, collection log, close-out. **No** IT notifications (call fails quietly); **no** live ref tab. |
-| **+ Employee directory PostgreSQL:** `DIRECTORY_DATABASE_URL` and optional directory settings | The app snapshots canonical employee state into `DirectoryEmployeeState`, updates `User` activity and manager relationships, and exposes active, terminated, and review states under **Admin → Directory**. This source is authoritative when configured; Microsoft Graph remains the fallback. |
+| **+ Employee directory PostgreSQL:** `DIRECTORY_DATABASE_URL` and optional directory settings | The app snapshots canonical employee state into `DirectoryEmployeeState`, updates `User` activity, manager relationships, division, department, and subdivision, and exposes active, terminated, and review states under **Admin → Directory**. This source is authoritative when configured; Microsoft Graph remains the fallback. |
 | **+ Reftab:** `REF_TAB_API_URL` (default `https://www.reftab.com/api`), `REF_TAB_API_PUBLIC_KEY`, `REF_TAB_API_SECRET_KEY` | Everything above, plus equipment is **merged from Reftab** via `GET /assets` (HMAC auth). Optional field mapping env vars — see [API_CONNECTIONS.md](./API_CONNECTIONS.md). If Reftab is not configured or returns nothing, cached/seed equipment still shows. |
 | **+ Notifications:** `NOTIFICATION_PROVIDER` + one of `WEBHOOK_URL` / `TEAMS_WEBHOOK_URL` / SMTP vars | When a manager marks an item collected, **IT is notified** (webhook POST, Teams message, or email). Collection event is still stored even if the notification fails. |
+| **+ NinjaOne:** `NINJAONE_*` credentials | Active-employee reconciliation compares device identity and likely-user evidence with Reftab. Human reviewers see the match reason/confidence and decide Yes, No, Unsure, or Defer. |
+| **+ Role configuration:** role employee-ID lists and/or Entra group IDs | Admin, IT close-out, reconciliation, executive analytics, and account-support capabilities fail closed in production. |
+| **+ Snowflake:** `SNOWFLAKE_*` credentials and `SNOWFLAKE_SYNC_ENABLED=true` | Publishes the current organization inventory/value snapshot at startup and on the configured independent interval. |
 | **+ `APP_BASE_URL`** | Links in notifications point to this URL (e.g. collection page). |
-| **+ `CURRENT_USER_EMPLOYEE_ID`** (pilot) | Override which manager is “logged in” for testing (must be in `MANAGER_EMPLOYEE_IDS`). |
+| **+ `CURRENT_USER_EMPLOYEE_ID`** (pilot) | Override which existing user is “logged in” for testing. |
 
 **Summary:** With **only** database + manager list + seed data, the app already does: manager dashboard (staff + equipment from DB), staff detail, mark collected, collection history, and close-out. Adding **Reftab** public/secret keys (see [Reftab API docs](https://www.reftab.com/api-docs)) turns on live equipment from **`GET /assets`**; adding notification env vars turns on IT alerts. No code changes required—just env and one-time DB setup.
+
+---
+
+## Implemented operational workflows
+
+### Employee lifecycle and manager reporting
+
+- Direct and cascading manager views use the replicated Paycom hierarchy.
+- Active reports remain visible even when they have no assigned equipment.
+- Inactive reports remain visible while an `EquipmentAssignment` or unresolved
+  collection exists and fall out of the active return workflow after the last
+  item is marked collected.
+- Direct and cascade views include card layouts on smaller screens and
+  division, department, and subdivision filters.
+
+### Equipment return and notification handling
+
+- **Admin → Return Workflow** selects allowed return recipients (supervisor,
+  HR, IT, or designated recipient), instructions, and whether a return location
+  is required.
+- Marking an item collected creates a durable `CollectionEvent`, removes the
+  outstanding assignment, and records the intended recipient/location.
+- Each notification records `PENDING`, `SENT`, or `FAILED`, the provider
+  reference when available, and a bounded error message. IT/admin users can
+  retry failed notifications from **Collection log**.
+- Only IT/admin capability holders can perform final close-out.
+
+### Ownership accuracy and correction
+
+- **Owner Reconcile** compares Reftab assignments to NinjaOne device identity
+  and likely-user signals for active employees.
+- Results display match reasons and confidence. Yes writes the approved owner
+  to Reftab; No and Unsure create correction requests; Defer hides the review
+  until `RECONCILIATION_DEFER_HOURS` has elapsed.
+- Reconciliation results are cached for
+  `OWNER_RECONCILIATION_CACHE_MINUTES`, invalidated by Reftab/NinjaOne sync and
+  approved changes, and can be recalculated manually.
+- **Corrections** provides a tracked request/audit workflow for inaccurate
+  assignments. Managers see their own/team requests; IT/reconciliation users
+  can manage the queue.
+
+### Portal modules, reporting, and rollout
+
+- **Modules** is the common entry point for equipment returns and account
+  remediation. The module selector only advertises capabilities granted to the
+  current user.
+- **Account Remediation** accepts provisioning/access issues from authenticated
+  users and gives account-support users a managed, audited queue.
+- **Organization Analytics** groups assets and employees by division,
+  department, or subdivision and reports purchase, replacement, and book value.
+  **Admin → Asset Valuations** maintains per-asset values.
+- **Admin → Rollout Readiness** combines a sign-off checklist with live data
+  quality counts and configuration checks for a controlled pilot.
+
+### Role and pilot configuration
+
+Capabilities can be granted by Entra security-group object ID in production or
+by employee ID for local/pilot operation:
+
+| Capability | Group variable | Employee-ID variable |
+|------------|----------------|----------------------|
+| Administrator | `ADMIN_GROUP_IDS` | `ADMIN_EMPLOYEE_IDS` |
+| IT close-out | `IT_GROUP_IDS` | `IT_EMPLOYEE_IDS` |
+| Ownership reconciliation | `RECONCILIATION_GROUP_IDS` | `RECONCILIATION_EMPLOYEE_IDS` |
+| Organization analytics | `EXECUTIVE_GROUP_IDS` | `EXECUTIVE_EMPLOYEE_IDS` |
+| Account support | `ACCOUNT_SUPPORT_GROUP_IDS` | `ACCOUNT_SUPPORT_EMPLOYEE_IDS` |
+
+Set `PILOT_MODE_ENABLED=true` and populate `PILOT_EMPLOYEE_IDS` to restrict the
+entire portal to a small allowlist. Group claims require the Entra `groups`
+claim. `ALLOW_MANAGER_ADMIN_FALLBACK` is development-only; production does not
+grant admin merely because a user is a manager.
 
 ---
 
@@ -101,6 +178,9 @@ Open http://localhost:3000. Pilot auth uses `CURRENT_USER_EMPLOYEE_ID` (or first
 - **Authoritative employee state:** Configure `DIRECTORY_DATABASE_URL` to read the lifecycle table (default `paycom.paycom_employee_state`). The account should have only `CONNECT`, schema `USAGE`, and table `SELECT`.
 - **Canonical identity:** One row per trimmed employee code is selected. `MERGED_DUPLICATE` rows are excluded and the newest `last_paycom_sync_at` observation wins; lifecycle state and source key provide deterministic tie-breakers.
 - **State mapping:** `employee_status=A` with `state_status=ACTIVE` is active. `employee_status=T` with `state_status=OFFBOARDING` is terminated. `NEEDS_REVIEW` remains visible for follow-up.
+- **Organization mapping:** Optional `DIRECTORY_DIVISION_COLUMN`,
+  `DIRECTORY_DEPARTMENT_COLUMN`, and `DIRECTORY_SUBDIVISION_COLUMN` settings
+  copy those source values into both the snapshot and `User`.
 - **Target:** Every sync refreshes `DirectoryEmployeeState`, upserts the `User` table, rebuilds manager links, and marks missing directory-sourced users inactive.
 - **Manager views:** When the PostgreSQL directory is configured, report hierarchies use only canonical directory users. Active reports are always shown; inactive reports remain in operational views only while assigned or unresolved equipment still requires collection.
 - **Safety:** `DIRECTORY_SYNC_MIN_ROWS` aborts an unexpectedly small source read before stale target rows are removed.
@@ -122,6 +202,8 @@ Exactly one channel is used, driven by `NOTIFICATION_PROVIDER` and the correspon
 - **Payload (webhook):**  
   `event`, `assetTag`, `serial`, `employeeId`, `employeeName`, `markedByManagerId`, `markedByManagerName`, `notes`, `markedAt`, `eventId`, `message`, `link` (portal collection page).
 - **Usage:** Called automatically when a manager marks an item as collected.
+  Delivery status/reference/error is persisted on the collection event and
+  failed sends can be retried by IT/admin users.
 
 ---
 
@@ -130,8 +212,11 @@ Exactly one channel is used, driven by `NOTIFICATION_PROVIDER` and the correspon
 - **Pilot:** No SSO. Current user is determined by:
   - `CURRENT_USER_EMPLOYEE_ID` if set, else
   - First value in `MANAGER_EMPLOYEE_IDS`.
-  Only users in `MANAGER_EMPLOYEE_IDS` are treated as managers. No external auth API.
-- **Production:** Replace this with your org SSO (e.g. Entra/OIDC). After login, set the app’s “current user” from the token (e.g. `oid` or `email` mapped to `User.employeeId` / UPN). No new “API” beyond your existing IdP.
+  Manager hierarchy still comes from `User.isManager` and manager
+  relationships. Capability lists above control privileged modules.
+- **Production:** Entra/OIDC resolves the signed-in user from the token and maps
+  employee ID/UPN/email to `User`. Entra group claims grant privileged
+  capabilities.
 
 ---
 
@@ -144,7 +229,9 @@ Exactly one channel is used, driven by `NOTIFICATION_PROVIDER` and the correspon
 | Employee directory | PostgreSQL snapshot → DB | No (use seed) | `DIRECTORY_DATABASE_URL` plus optional `DIRECTORY_*` settings |
 | Microsoft Entra  | SSO + fallback Graph sync | No (pilot mode) | `AZURE_AD_TENANT_ID`, `AZURE_AD_CLIENT_ID`, `AZURE_AD_CLIENT_SECRET`, `NEXTAUTH_SECRET` |
 | IT notification  | Webhook/Teams/Email | Yes (to alert IT) | `NOTIFICATION_PROVIDER` + `WEBHOOK_URL` or `TEAMS_WEBHOOK_URL` or SMTP vars |
-| Auth             | Env / later SSO | Yes (env)        | `CURRENT_USER_EMPLOYEE_ID`, `MANAGER_EMPLOYEE_IDS` |
+| NinjaOne         | OAuth2 client credentials | No | `NINJAONE_BASE_URL`, `NINJAONE_CLIENT_ID`, `NINJAONE_CLIENT_SECRET` |
+| Snowflake        | SQL connection | No | `SNOWFLAKE_*`, `SNOWFLAKE_SYNC_ENABLED` |
+| Auth / roles     | Env or Entra SSO/groups | Yes | `CURRENT_USER_EMPLOYEE_ID`, `MANAGER_EMPLOYEE_IDS`, role ID/group variables |
 
 ---
 

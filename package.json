@@ -17,26 +17,32 @@
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
-    "next": "^15.5.15",
-    "next-auth": "^4.24.14",
-    "nodemailer": "^7.0.13",
+    "next": "^15.5.27",
+    "next-auth": "^4.24.15",
+    "nodemailer-secure": "npm:nodemailer@^10.0.13",
     "prisma": "^5.22.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "tsx": "^4.19.2",
+    "sharp": "^0.35.5",
+    "snowflake-sdk": "^3.4.0",
+    "tsx": "^4.23.15",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
-    "@types/nodemailer": "^7.0.11",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "@types/snowflake-sdk": "^1.6.24",
     "autoprefixer": "^10.5.0",
-    "postcss": "^8.5.14",
+    "postcss": "^8.5.28",
     "tailwindcss": "^3.4.14",
     "typescript": "^5.6.3"
   },
   "overrides": {
+    "postcss": "$postcss",
+    "next-auth": {
+      "nodemailer": "10.0.13"
+    },
     "anymatch": {
       "picomatch": "2.3.2"
     },

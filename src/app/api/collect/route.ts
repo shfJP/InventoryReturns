@@ -4,6 +4,7 @@ import { getCurrentEmployeeId, getReportEmployeeIds } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { notifyItCollected } from "@/lib/notify";
 import { invalidateUnresolvedCollectionsCache } from "@/lib/unresolved-cache";
+import { getReturnWorkflowConfig, RETURN_RECIPIENT_ROLES } from "@/lib/return-workflow";
 
 const bodySchema = z.object({
   assetTag: z.string().min(1),
@@ -11,6 +12,8 @@ const bodySchema = z.object({
   assignedToEmployeeId: z.string().min(1),
   notes: z.string().optional(),
   collectedByRole: z.enum(["manager", "it"]).optional(),
+  returnRecipientRole: z.enum(RETURN_RECIPIENT_ROLES).optional(),
+  returnLocation: z.string().max(240).optional(),
 });
 
 export const dynamic = "force-dynamic";
@@ -37,7 +40,15 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid body", details: parsed.error.flatten() }, { status: 400 });
   }
-  const { assetTag, serial, assignedToEmployeeId, notes, collectedByRole } = parsed.data;
+  const { assetTag, serial, assignedToEmployeeId, notes, collectedByRole, returnLocation } = parsed.data;
+  const workflow = await getReturnWorkflowConfig();
+  const returnRecipientRole = parsed.data.returnRecipientRole ?? workflow.defaultRecipientRole;
+  if (!workflow.enabledRecipientRoles.includes(returnRecipientRole)) {
+    return NextResponse.json({ error: "The selected return recipient is not enabled" }, { status: 400 });
+  }
+  if (workflow.requireLocation && !returnLocation?.trim()) {
+    return NextResponse.json({ error: "A return location is required" }, { status: 400 });
+  }
   if (!scope.includes(assignedToEmployeeId)) {
     return NextResponse.json({ error: "Forbidden: not in your report scope" }, { status: 403 });
   }
@@ -67,6 +78,9 @@ export async function POST(req: NextRequest) {
       notes: notes ?? null,
       status: "COLLECTED_PENDING_IT",
       collectedByRole: collectedByRole ?? "manager",
+      returnRecipientRole,
+      returnLocation: returnLocation?.trim() || null,
+      notificationStatus: "PENDING",
       equipmentAssignmentId: equipment?.id ?? null,
     },
   });
@@ -99,10 +113,20 @@ export async function POST(req: NextRequest) {
     notes,
     markedAt: event.markedCollectedAt.toISOString(),
     eventId: event.id,
+    returnRecipientRole,
+    returnLocation: returnLocation?.trim(),
   });
   if (!notifyResult.ok) {
     console.warn("IT notification failed:", notifyResult.error);
   }
+  await prisma.collectionEvent.update({
+    where: { id: event.id },
+    data: {
+      notificationStatus: notifyResult.ok ? "SENT" : "FAILED",
+      notificationReference: notifyResult.reference ?? null,
+      notificationError: notifyResult.ok ? null : notifyResult.error ?? "Notification failed",
+    },
+  });
 
   return NextResponse.json({
     id: event.id,
@@ -110,5 +134,7 @@ export async function POST(req: NextRequest) {
     status: event.status,
     markedCollectedAt: event.markedCollectedAt.toISOString(),
     notificationSent: notifyResult.ok,
+    notificationError: notifyResult.ok ? null : notifyResult.error ?? "Notification failed",
+    returnRecipientRole,
   });
 }

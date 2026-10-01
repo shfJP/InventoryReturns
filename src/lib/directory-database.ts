@@ -7,6 +7,9 @@ const DIRECTORY_DATABASE_URL = (process.env.DIRECTORY_DATABASE_URL ?? "").trim()
 const DIRECTORY_SCHEMA = (process.env.DIRECTORY_DATABASE_SCHEMA ?? "paycom").trim();
 const DIRECTORY_EMPLOYEE_TABLE = (process.env.DIRECTORY_EMPLOYEE_STATE_TABLE ?? "paycom_employee_state").trim();
 const DIRECTORY_SOURCE = (process.env.DIRECTORY_SOURCE_NAME ?? "paycom").trim() || "paycom";
+const DIRECTORY_DIVISION_COLUMN = (process.env.DIRECTORY_DIVISION_COLUMN ?? "").trim();
+const DIRECTORY_DEPARTMENT_COLUMN = (process.env.DIRECTORY_DEPARTMENT_COLUMN ?? "").trim();
+const DIRECTORY_SUBDIVISION_COLUMN = (process.env.DIRECTORY_SUBDIVISION_COLUMN ?? "").trim();
 const MIN_EXPECTED_ROWS = Math.max(Number(process.env.DIRECTORY_SYNC_MIN_ROWS) || 100, 1);
 const BATCH_SIZE = Math.min(Math.max(Number(process.env.DIRECTORY_SYNC_BATCH_SIZE) || 500, 50), 1_000);
 const SYNC_LOCK_NAME = "inventory_returns_directory_sync";
@@ -20,6 +23,9 @@ type SourceEmployeeState = {
   employmentStatus: string;
   directoryState: string;
   isActive: boolean;
+  division: string | null;
+  department: string | null;
+  subdivision: string | null;
   terminationDate: Date | null;
   sourceSyncedAt: Date | null;
 };
@@ -42,6 +48,11 @@ function quoteIdentifier(identifier: string, label: string): string {
     throw new Error(`${label} must be a simple PostgreSQL identifier.`);
   }
   return `"${identifier}"`;
+}
+
+function optionalSourceText(column: string, envName: string, alias: string): string {
+  if (!column) return `NULL::text AS "${alias}"`;
+  return `NULLIF(btrim(${quoteIdentifier(column, envName)}::text), '') AS "${alias}"`;
 }
 
 function chunks<T>(items: T[], size: number): T[][] {
@@ -84,6 +95,9 @@ async function fetchCurrentEmployeeStates(): Promise<SourceEmployeeState[]> {
           COALESCE(NULLIF(btrim(employee_status), ''), 'UNKNOWN') AS "employmentStatus",
           COALESCE(NULLIF(btrim(state_status), ''), 'NEEDS_REVIEW') AS "directoryState",
           (btrim(employee_status) = 'A' AND btrim(state_status) = 'ACTIVE') AS "isActive",
+          ${optionalSourceText(DIRECTORY_DIVISION_COLUMN, "DIRECTORY_DIVISION_COLUMN", "division")},
+          ${optionalSourceText(DIRECTORY_DEPARTMENT_COLUMN, "DIRECTORY_DEPARTMENT_COLUMN", "department")},
+          ${optionalSourceText(DIRECTORY_SUBDIVISION_COLUMN, "DIRECTORY_SUBDIVISION_COLUMN", "subdivision")},
           termination_date AS "terminationDate",
           last_paycom_sync_at AS "sourceSyncedAt",
           row_number() OVER (
@@ -117,6 +131,9 @@ async function fetchCurrentEmployeeStates(): Promise<SourceEmployeeState[]> {
         "employmentStatus",
         "directoryState",
         "isActive",
+        "division",
+        "department",
+        "subdivision",
         "terminationDate",
         "sourceSyncedAt"
       FROM ranked
@@ -140,6 +157,9 @@ async function replicateSnapshot(rows: SourceEmployeeState[], replicatedAt: Date
         "employmentStatus",
         "directoryState",
         "isActive",
+        "division",
+        "department",
+        "subdivision",
         "terminationDate",
         "sourceSyncedAt",
         "replicatedAt"
@@ -153,6 +173,9 @@ async function replicateSnapshot(rows: SourceEmployeeState[], replicatedAt: Date
         x."employmentStatus",
         x."directoryState",
         x."isActive",
+        x."division",
+        x."department",
+        x."subdivision",
         x."terminationDate",
         x."sourceSyncedAt",
         x."replicatedAt"
@@ -165,6 +188,9 @@ async function replicateSnapshot(rows: SourceEmployeeState[], replicatedAt: Date
         "employmentStatus" text,
         "directoryState" text,
         "isActive" boolean,
+        "division" text,
+        "department" text,
+        "subdivision" text,
         "terminationDate" timestamptz,
         "sourceSyncedAt" timestamptz,
         "replicatedAt" timestamptz
@@ -177,6 +203,9 @@ async function replicateSnapshot(rows: SourceEmployeeState[], replicatedAt: Date
         "employmentStatus" = EXCLUDED."employmentStatus",
         "directoryState" = EXCLUDED."directoryState",
         "isActive" = EXCLUDED."isActive",
+        "division" = EXCLUDED."division",
+        "department" = EXCLUDED."department",
+        "subdivision" = EXCLUDED."subdivision",
         "terminationDate" = EXCLUDED."terminationDate",
         "sourceSyncedAt" = EXCLUDED."sourceSyncedAt",
         "replicatedAt" = EXCLUDED."replicatedAt"
@@ -221,6 +250,9 @@ async function upsertUsers(rows: SourceEmployeeState[], syncedAt: Date): Promise
       directorySourcePersonKey: row.sourcePersonKey,
       employmentStatus: row.employmentStatus,
       directoryState: row.directoryState,
+      division: row.division,
+      department: row.department,
+      subdivision: row.subdivision,
       terminationDate: row.terminationDate?.toISOString() ?? null,
       lastSyncedAt: syncedAt.toISOString(),
       createdAt: syncedAt.toISOString(),
@@ -239,6 +271,9 @@ async function upsertUsers(rows: SourceEmployeeState[], syncedAt: Date): Promise
         "directorySourcePersonKey",
         "employmentStatus",
         "directoryState",
+        "division",
+        "department",
+        "subdivision",
         "terminationDate",
         "lastSyncedAt",
         "createdAt",
@@ -255,6 +290,9 @@ async function upsertUsers(rows: SourceEmployeeState[], syncedAt: Date): Promise
         x."directorySourcePersonKey",
         x."employmentStatus",
         x."directoryState",
+        x."division",
+        x."department",
+        x."subdivision",
         x."terminationDate",
         x."lastSyncedAt",
         x."createdAt",
@@ -269,6 +307,9 @@ async function upsertUsers(rows: SourceEmployeeState[], syncedAt: Date): Promise
         "directorySourcePersonKey" text,
         "employmentStatus" text,
         "directoryState" text,
+        "division" text,
+        "department" text,
+        "subdivision" text,
         "terminationDate" timestamptz,
         "lastSyncedAt" timestamptz,
         "createdAt" timestamptz,
@@ -283,6 +324,9 @@ async function upsertUsers(rows: SourceEmployeeState[], syncedAt: Date): Promise
         "directorySourcePersonKey" = EXCLUDED."directorySourcePersonKey",
         "employmentStatus" = EXCLUDED."employmentStatus",
         "directoryState" = EXCLUDED."directoryState",
+        "division" = EXCLUDED."division",
+        "department" = EXCLUDED."department",
+        "subdivision" = EXCLUDED."subdivision",
         "terminationDate" = EXCLUDED."terminationDate",
         "lastSyncedAt" = EXCLUDED."lastSyncedAt",
         "updatedAt" = EXCLUDED."updatedAt"

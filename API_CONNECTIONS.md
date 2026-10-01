@@ -62,6 +62,9 @@ When `DIRECTORY_DATABASE_URL` is set, the lifecycle database is the authoritativ
 | `DIRECTORY_DATABASE_SCHEMA` | `paycom` | Source schema. Must be a simple PostgreSQL identifier. |
 | `DIRECTORY_EMPLOYEE_STATE_TABLE` | `paycom_employee_state` | Source table. Must be a simple PostgreSQL identifier. |
 | `DIRECTORY_SOURCE_NAME` | `paycom` | Source marker written onto target `User` rows. |
+| `DIRECTORY_DIVISION_COLUMN` | empty | Optional source column copied into `DirectoryEmployeeState.division` and `User.division`. Must be a simple identifier. |
+| `DIRECTORY_DEPARTMENT_COLUMN` | empty | Optional source column copied into `DirectoryEmployeeState.department` and `User.department`. Must be a simple identifier. |
+| `DIRECTORY_SUBDIVISION_COLUMN` | empty | Optional source column copied into `DirectoryEmployeeState.subdivision` and `User.subdivision`. Must be a simple identifier. |
 | `DIRECTORY_SYNC_MIN_ROWS` | `100` | Safety floor. A smaller canonical result aborts before stale target rows are deleted. Set this near the expected lower bound in production. |
 | `DIRECTORY_SYNC_BATCH_SIZE` | `500` | Target upsert batch size, clamped to 50–1000. |
 | `DIRECTORY_SYNC_INTERVAL_MINUTES` | `720` | Scheduled directory interval. When explicitly set, this overrides an older value saved in Settings. |
@@ -79,7 +82,18 @@ The source query uses:
 - `termination_date`
 - `last_paycom_sync_at`
 
-It excludes `MERGED_DUPLICATE`, selects one canonical row per trimmed employee code, and treats the newest `last_paycom_sync_at` observation as authoritative. Lifecycle state and source key are deterministic tie-breakers when timestamps match. The target sync refreshes `DirectoryEmployeeState`, upserts `User`, rebuilds manager relationships, marks stale directory users inactive, and creates unresolved equipment-collection records when an employee transitions inactive. Entra SSO identity lookup is case-insensitive across employee ID, UPN, and email and prefers the active, recently synced directory row, which bridges legacy UPN-based users to lifecycle employee codes. If the database source is configured but the target snapshot is empty, the worker performs one bootstrap sync at container startup even when normal startup sync is disabled.
+When configured, the optional organization columns are also selected. The sync
+excludes `MERGED_DUPLICATE`, selects one canonical row per trimmed employee
+code, and treats the newest `last_paycom_sync_at` observation as authoritative.
+Lifecycle state and source key are deterministic tie-breakers when timestamps
+match. The target sync refreshes `DirectoryEmployeeState`, upserts `User`,
+rebuilds manager relationships, marks stale directory users inactive, and
+creates unresolved equipment-collection records when an employee transitions
+inactive. Entra SSO identity lookup is case-insensitive across employee ID, UPN,
+and email and prefers the active, recently synced directory row, which bridges
+legacy UPN-based users to lifecycle employee codes. If the database source is
+configured but the target snapshot is empty, the worker performs one bootstrap
+sync at container startup even when normal startup sync is disabled.
 
 Recommended source grants:
 
@@ -107,13 +121,107 @@ Optional: `APP_BASE_URL` for links in notifications.
 
 ---
 
-## 5. Auth (pilot)
+### Delivery tracking and retry
+
+Every collection event records the notification state (`PENDING`, `SENT`, or
+`FAILED`), the email message ID/provider reference when available, and a bounded
+error message. A failed alert does not roll back collection. IT/admin users can
+retry it from the collection log through
+`POST /api/collection/retry-notification`.
+
+---
+
+## 5. NinjaOne (device/owner evidence)
+
+| Env | Default | Description |
+|-----|---------|-------------|
+| `NINJAONE_BASE_URL` | `https://app.ninjarmm.com` | NinjaOne tenant/API base. |
+| `NINJAONE_CLIENT_ID` | empty | API Services OAuth client ID. |
+| `NINJAONE_CLIENT_SECRET` | empty | API Services OAuth client secret. |
+| `NINJAONE_SCOPE` | `monitoring` | OAuth scope. |
+| `NINJAONE_PAGE_SIZE` | `500` | Device list page size. |
+| `NINJAONE_ENRICH_DEVICE_DETAILS` | `true` | Fetch details/custom fields/last-user evidence. |
+| `NINJAONE_ENRICH_CONCURRENCY` | `5` | Concurrency for detail enrichment. |
+| `OWNER_RECONCILIATION_CACHE_MINUTES` | `240` | Cache lifetime for the expensive Reftab/NinjaOne comparison. |
+| `RECONCILIATION_DEFER_HOURS` | `24` | Time before a deferred review returns to the queue. |
+
+NinjaOne logged-in-user data is supporting evidence only. The reconciliation
+page resolves the signal against active directory users, displays identity
+match reasons and confidence, and requires a human Yes/No/Unsure/Defer
+decision. No/Unsure creates an audited correction request. Yes performs the
+configured Reftab owner change.
+
+---
+
+## 6. Snowflake organization snapshot
+
+| Env | Default | Description |
+|-----|---------|-------------|
+| `SNOWFLAKE_SYNC_ENABLED` | `false` | Enables independent startup and interval publishing. |
+| `SNOWFLAKE_SYNC_INTERVAL_MINUTES` | `720` | Publish interval (minimum 60 minutes). |
+| `SNOWFLAKE_ACCOUNT` | empty | Snowflake account identifier. |
+| `SNOWFLAKE_USERNAME` | empty | Service-account username. |
+| `SNOWFLAKE_PASSWORD` | empty | Service-account password. |
+| `SNOWFLAKE_WAREHOUSE` | empty | Warehouse used by the sync. |
+| `SNOWFLAKE_DATABASE` | empty | Target database. |
+| `SNOWFLAKE_SCHEMA` | empty | Target schema. |
+| `SNOWFLAKE_ROLE` | empty | Optional execution role. |
+| `SNOWFLAKE_INVENTORY_TABLE` | `INVENTORY_ORGANIZATION_SNAPSHOT` | Target table name. |
+
+The worker creates the snapshot table if needed, replaces rows whose source is
+`inventory-returns`, and writes subdivision-level employee, asset, purchase,
+replacement, and book-value totals in one transaction. The manual admin sync is
+`POST /api/admin/sync-snowflake`. Use a least-privilege service role with usage
+on the warehouse/database/schema and create/delete/insert access on only the
+target table/schema as appropriate.
+
+`SNOWFLAKE_SYNC_ENABLED` is independent of `AUTO_SYNC_ON_STARTUP` and
+`SYNC_CRON_ENABLED`. A real Snowflake account is required to validate network,
+role, warehouse, and bulk-bind behavior.
+
+---
+
+## 7. Auth, roles, and pilot access
 
 | Env | Description |
 |-----|-------------|
-| `MANAGER_EMPLOYEE_IDS` | Comma-separated employee IDs allowed to act as managers. |
-| `CURRENT_USER_EMPLOYEE_ID` | Impersonate this user (pilot). Omit in production when using SSO. |
+| `MANAGER_EMPLOYEE_IDS` | Comma-separated pilot identities. The first ID is the login fallback; manager/report scope still comes from the directory hierarchy. |
+| `CURRENT_USER_EMPLOYEE_ID` | Use this existing user as the current pilot identity. Omit in production when using SSO. |
+| `PILOT_MODE_ENABLED` | Set `true` to apply the whole-portal pilot allowlist. |
+| `PILOT_EMPLOYEE_IDS` | Comma-separated employee IDs allowed during the pilot. A configured pilot with an empty list fails closed. |
+| `ADMIN_GROUP_IDS` / `ADMIN_EMPLOYEE_IDS` | Administrator capability. |
+| `IT_GROUP_IDS` / `IT_EMPLOYEE_IDS` | IT collection close-out and operational correction management. |
+| `RECONCILIATION_GROUP_IDS` / `RECONCILIATION_EMPLOYEE_IDS` | Reftab/NinjaOne ownership review. |
+| `EXECUTIVE_GROUP_IDS` / `EXECUTIVE_EMPLOYEE_IDS` | Organization and financial analytics. |
+| `ACCOUNT_SUPPORT_GROUP_IDS` / `ACCOUNT_SUPPORT_EMPLOYEE_IDS` | Management of the account-remediation queue. |
+| `ALLOW_MANAGER_ADMIN_FALLBACK` | Development-only manager-to-admin compatibility. Ignored in production. |
 
-API routes use these env vars (plus `DATABASE_URL` / `User` rows) to authorize `/api/collect` and related calls. **Coolify / production:** set `MANAGER_EMPLOYEE_IDS` and optional `CURRENT_USER_EMPLOYEE_ID` to IDs that exist in the deployed database, or mark-collected requests will fail with 401/403/404. See [README.md](./README.md) (section *Coolify / production: env vars for pilot auth and “Mark collected”*).
+API routes use these env vars (plus `DATABASE_URL` / `User` rows) to authorize
+collection and related calls. **Coolify / production:** set
+`MANAGER_EMPLOYEE_IDS` and optional `CURRENT_USER_EMPLOYEE_ID` to IDs that exist
+in the deployed database, or pilot requests will fail with 401/403/404. See
+[README.md](./README.md) (section *Coolify / production: env vars for pilot auth
+and “Mark collected”*).
 
-Production: replace with SSO (e.g. Entra/OIDC); resolve current user from token and map to `User.employeeId`.
+Production uses Entra/OIDC and maps employee ID/UPN/email to `User`. Configure
+the Entra `groups` token claim and populate the group object-ID lists above.
+Privileged capabilities fail closed in production when neither a matching group
+nor employee-ID override is present.
+
+---
+
+## 8. Application-owned workflow configuration
+
+These settings are stored in the target PostgreSQL `AppSetting` table and are
+managed in the portal:
+
+- **Admin → Return Workflow:** enabled/default recipient roles, designated
+  recipient label, instructions, and required-location rule.
+- **Admin → Rollout Readiness:** data review, workflow/security approval, pilot,
+  training, communication, and launch sign-off checklist.
+- **Sync settings:** startup/cron toggles and intervals for directory, Reftab,
+  and NinjaOne.
+
+Workflow queues (`CorrectionRequest`, `AccountRemediation`) and their audit
+tables are also application-owned. The project intentionally uses
+`prisma db push`; run it during deployment before starting the application.

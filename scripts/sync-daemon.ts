@@ -4,6 +4,7 @@ import { syncReftabToDb } from "../src/lib/ref-tab";
 import { getSyncSettings } from "../src/lib/sync-settings";
 import { markSyncDaemonHeartbeat, markSyncFailed, markSyncFinished, markSyncStarted } from "../src/lib/sync-status";
 import { prisma } from "../src/lib/db";
+import { isSnowflakeConfigured, syncOrganizationReportToSnowflake } from "../src/lib/snowflake";
 
 let directoryRunning = false;
 let reftabRunning = false;
@@ -11,6 +12,7 @@ let ninjaOneRunning = false;
 let lastDirectoryScheduledRunAt = 0;
 let lastReftabScheduledRunAt = 0;
 let lastNinjaOneScheduledRunAt = 0;
+let lastSnowflakeScheduledRunAt = 0;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -82,6 +84,16 @@ async function runNinjaOneSync(reason: string): Promise<void> {
   }
 }
 
+async function runSnowflakeSync(reason: string): Promise<void> {
+  console.info(`[sync] Starting Snowflake ${reason}.`);
+  try {
+    const result = await syncOrganizationReportToSnowflake();
+    console.info(`[sync] Snowflake complete: ${JSON.stringify(result)}.`);
+  } catch (e) {
+    console.warn(`[sync] Snowflake failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 async function main(): Promise<void> {
   const startedAt = new Date().toISOString();
   console.info("[sync] Background sync worker started.");
@@ -91,6 +103,9 @@ async function main(): Promise<void> {
   const dedicatedDirectoryScheduleEnabled =
     configuredDirectorySource() === "database" &&
     process.env.DIRECTORY_SYNC_SCHEDULE_ENABLED === "true";
+  const snowflakeScheduleEnabled =
+    process.env.SNOWFLAKE_SYNC_ENABLED === "true" &&
+    isSnowflakeConfigured();
   const directorySnapshotMissing =
     configuredDirectorySource() === "database" &&
     await prisma.directoryEmployeeState.count() === 0;
@@ -110,17 +125,22 @@ async function main(): Promise<void> {
       lastNinjaOneScheduledRunAt = Date.now();
     }
   }
+  if (snowflakeScheduleEnabled) {
+    await runSnowflakeSync("startup sync");
+    lastSnowflakeScheduledRunAt = Date.now();
+  }
 
   while (true) {
     await sleep(60_000);
     await markSyncDaemonHeartbeat(startedAt);
     const settings = await getSyncSettings();
-    if (!settings.cronEnabled && !dedicatedDirectoryScheduleEnabled) continue;
+    if (!settings.cronEnabled && !dedicatedDirectoryScheduleEnabled && !snowflakeScheduleEnabled) continue;
 
     const now = Date.now();
     const directoryIntervalMs = Math.max(settings.entraIntervalMinutes, 5) * 60_000;
     const reftabIntervalMs = Math.max(settings.reftabIntervalMinutes, 5) * 60_000;
     const ninjaOneIntervalMs = Math.max(settings.ninjaOneIntervalMinutes, 5) * 60_000;
+    const snowflakeIntervalMs = Math.max(Number(process.env.SNOWFLAKE_SYNC_INTERVAL_MINUTES) || 720, 60) * 60_000;
 
     if (
       (dedicatedDirectoryScheduleEnabled || (settings.cronEnabled && settings.syncEntra)) &&
@@ -138,6 +158,14 @@ async function main(): Promise<void> {
     if (settings.cronEnabled && settings.syncNinjaOne && now - lastNinjaOneScheduledRunAt >= ninjaOneIntervalMs) {
       await runNinjaOneSync(`scheduled sync every ${settings.ninjaOneIntervalMinutes} minute(s)`);
       lastNinjaOneScheduledRunAt = Date.now();
+    }
+
+    if (
+      snowflakeScheduleEnabled &&
+      now - lastSnowflakeScheduledRunAt >= snowflakeIntervalMs
+    ) {
+      await runSnowflakeSync(`scheduled sync every ${snowflakeIntervalMs / 60_000} minute(s)`);
+      lastSnowflakeScheduledRunAt = Date.now();
     }
   }
 }

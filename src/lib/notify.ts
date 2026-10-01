@@ -20,10 +20,34 @@ export type CollectionPayload = {
   notes?: string;
   markedAt: string;
   eventId: string;
+  returnRecipientRole?: string;
+  returnLocation?: string;
 };
 
-export async function notifyItCollected(payload: CollectionPayload): Promise<{ ok: boolean; error?: string }> {
-  const text = `Equipment collection: ${payload.assetTag} (${payload.serial ?? "n/a"}) — assigned to ${payload.employeeName} (${payload.employeeId}). Marked collected by ${payload.markedByManagerName} at ${payload.markedAt}. ${payload.notes ? `Notes: ${payload.notes}` : ""} View: ${APP_BASE_URL}/collection`;
+export type NotificationResult = {
+  ok: boolean;
+  error?: string;
+  reference?: string;
+};
+
+async function responseError(response: Response): Promise<string> {
+  const body = (await response.text().catch(() => "")).trim();
+  return body.slice(0, 2_000) || `HTTP ${response.status} ${response.statusText}`;
+}
+
+function responseReference(response: Response, provider: string): string {
+  const requestId =
+    response.headers.get("x-request-id") ??
+    response.headers.get("x-ms-request-id") ??
+    response.headers.get("request-id");
+  return requestId ? `${provider}:${requestId}` : `${provider}:http-${response.status}`;
+}
+
+export async function notifyItCollected(payload: CollectionPayload): Promise<NotificationResult> {
+  const returnHandoff = payload.returnRecipientRole
+    ? ` Return handoff: ${payload.returnRecipientRole}${payload.returnLocation ? ` at ${payload.returnLocation}` : ""}.`
+    : "";
+  const text = `Equipment collection: ${payload.assetTag} (${payload.serial ?? "n/a"}) — assigned to ${payload.employeeName} (${payload.employeeId}). Marked collected by ${payload.markedByManagerName} at ${payload.markedAt}.${returnHandoff} ${payload.notes ? `Notes: ${payload.notes}` : ""} View: ${APP_BASE_URL}/collection`;
   const body = {
     event: "equipment_collected",
     ...payload,
@@ -44,7 +68,9 @@ export async function notifyItCollected(payload: CollectionPayload): Promise<{ o
           potentialAction: [{ "@type": "OpenUri", name: "View portal", targets: [{ os: "default", uri: body.link }] }],
         }),
       });
-      return { ok: res.ok, error: res.ok ? undefined : await res.text() };
+      return res.ok
+        ? { ok: true, reference: responseReference(res, "teams") }
+        : { ok: false, error: await responseError(res) };
     } catch (e) {
       return { ok: false, error: String(e) };
     }
@@ -57,7 +83,9 @@ export async function notifyItCollected(payload: CollectionPayload): Promise<{ o
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      return { ok: res.ok, error: res.ok ? undefined : await res.text() };
+      return res.ok
+        ? { ok: true, reference: responseReference(res, "webhook") }
+        : { ok: false, error: await responseError(res) };
     } catch (e) {
       return { ok: false, error: String(e) };
     }
@@ -65,20 +93,22 @@ export async function notifyItCollected(payload: CollectionPayload): Promise<{ o
 
   if (PROVIDER === "email" && SMTP.host) {
     try {
-      const nodemailer = await import("nodemailer");
+      // Keep the SMTP client separate from next-auth's optional Nodemailer 7
+      // peer. This app does not use next-auth's email provider.
+      const nodemailer = await import("nodemailer-secure");
       const transport = nodemailer.default.createTransport({
         host: SMTP.host,
         port: SMTP.port,
         secure: false,
         auth: SMTP.user ? { user: SMTP.user, pass: SMTP.pass } : undefined,
       });
-      await transport.sendMail({
+      const info = await transport.sendMail({
         from: SMTP.user || "portal@localhost",
         to: NOTIFICATION_EMAIL_TO,
         subject: `[Equipment Portal] Collected: ${payload.assetTag} — ${payload.employeeName}`,
         text,
       });
-      return { ok: true };
+      return { ok: true, reference: info.messageId ? `email:${info.messageId}` : "email:accepted" };
     } catch (e) {
       return { ok: false, error: String(e) };
     }

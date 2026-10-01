@@ -12,6 +12,9 @@ type DirectReport = {
   displayName: string;
   email: string;
   isActive: boolean;
+  division: string | null;
+  department: string | null;
+  subdivision: string | null;
   assigned: number;
   collected: number;
   outstanding: number;
@@ -23,21 +26,36 @@ export default function DirectReportsPage() {
   const [reports, setReports] = useState<DirectReport[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [division, setDivision] = useState("");
+  const [department, setDepartment] = useState("");
+  const [subdivision, setSubdivision] = useState("");
+  const [filterOptions, setFilterOptions] = useState({
+    divisions: [] as string[],
+    departments: [] as string[],
+    subdivisions: [] as string[],
+  });
 
   useEffect(() => {
     if (!isLoggedIn()) { router.replace("/login"); return; }
     (async () => {
       try {
-        const res = await fetch("/api/reports/direct");
+        setLoading(true);
+        const query = new URLSearchParams();
+        if (division) query.set("division", division);
+        if (department) query.set("department", department);
+        if (subdivision) query.set("subdivision", subdivision);
+        const res = await fetch(`/api/reports/direct${query.size ? `?${query}` : ""}`);
         if (!res.ok) throw new Error("Failed to load");
-        setReports(await res.json());
+        const data = await res.json();
+        setReports(Array.isArray(data) ? data : data.items ?? []);
+        if (!Array.isArray(data) && data.filters) setFilterOptions(data.filters);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load");
       } finally {
         setLoading(false);
       }
     })();
-  }, [router]);
+  }, [router, division, department, subdivision]);
 
   if (loading) return <div className="text-[var(--muted)]">Loading…</div>;
   if (error) return <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">{error}</div>;
@@ -51,6 +69,9 @@ export default function DirectReportsPage() {
       { header: "Employee ID", value: (row) => row.employeeId },
       { header: "Email", value: (row) => row.email },
       { header: "Active", value: (row) => row.isActive ? "Yes" : "No" },
+      { header: "Division", value: (row) => row.division },
+      { header: "Department", value: (row) => row.department },
+      { header: "Subdivision", value: (row) => row.subdivision },
       { header: "Assigned", value: (row) => row.totalEverAssigned },
       { header: "Collected", value: (row) => row.collected },
       { header: "Outstanding", value: (row) => row.outstanding },
@@ -88,7 +109,40 @@ export default function DirectReportsPage() {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm">
+      <div className="grid gap-3 rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm sm:grid-cols-3">
+        <OrganizationSelect label="Division" value={division} options={filterOptions.divisions} onChange={setDivision} />
+        <OrganizationSelect label="Department" value={department} options={filterOptions.departments} onChange={setDepartment} />
+        <OrganizationSelect label="Subdivision" value={subdivision} options={filterOptions.subdivisions} onChange={setSubdivision} />
+      </div>
+
+      <div className="grid gap-3 md:hidden">
+        {reports.map((report) => (
+          <article key={report.employeeId} className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="font-semibold text-[var(--text)]">{formatPersonName(report.displayName)}</h2>
+                <p className="text-xs text-[var(--muted)]">{report.employeeId}</p>
+              </div>
+              <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${report.isActive ? "bg-emerald-50 text-emerald-700" : "bg-orange-50 text-orange-700"}`}>
+                {report.isActive ? "Active" : "Pending collection"}
+              </span>
+            </div>
+            <p className="mt-2 text-xs text-[var(--muted)]">
+              {[report.division, report.department, report.subdivision].filter(Boolean).join(" · ") || "Organization not supplied"}
+            </p>
+            <dl className="mt-4 grid grid-cols-3 gap-2 text-center">
+              <Metric label="Assigned" value={report.totalEverAssigned} />
+              <Metric label="Collected" value={report.collected} />
+              <Metric label="Outstanding" value={report.outstanding} />
+            </dl>
+            <Link href={`/staff/${encodeURIComponent(report.employeeId)}`} className="mt-4 block rounded-lg bg-[var(--accent)] px-3 py-2 text-center text-sm font-medium text-white">
+              View and collect
+            </Link>
+          </article>
+        ))}
+      </div>
+
+      <div className="hidden overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm md:block">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[600px]">
             <thead>
@@ -96,6 +150,7 @@ export default function DirectReportsPage() {
                 <th className="table-header">Name</th>
                 <th className="table-header">Employee ID</th>
                 <th className="table-header">Status</th>
+                <th className="table-header">Organization</th>
                 <th className="table-header">Assigned</th>
                 <th className="table-header">Collected</th>
                 <th className="table-header">Outstanding</th>
@@ -140,6 +195,10 @@ export default function DirectReportsPage() {
                       </span>
                     )}
                   </td>
+                  <td className="table-cell text-[var(--text-secondary)]">
+                    <div>{r.division ?? "—"}</div>
+                    <div className="text-xs text-[var(--muted)]">{[r.department, r.subdivision].filter(Boolean).join(" · ") || "—"}</div>
+                  </td>
                   <td className="table-cell text-[var(--text)]">{r.totalEverAssigned}</td>
                   <td className="table-cell text-emerald-600 font-medium">{r.collected}</td>
                   <td className="table-cell text-amber-600 font-medium">{r.outstanding}</td>
@@ -160,6 +219,27 @@ export default function DirectReportsPage() {
           <p className="py-12 text-center text-[var(--muted)]">No direct reports found.</p>
         )}
       </div>
+    </div>
+  );
+}
+
+function OrganizationSelect({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
+  return (
+    <label className="text-sm font-medium text-[var(--text)]">
+      {label}
+      <select value={value} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-white px-3 py-2 text-sm">
+        <option value="">All {label.toLowerCase()}s</option>
+        {options.map((option) => <option key={option} value={option}>{option}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md bg-[var(--table-header-bg)] px-2 py-2">
+      <dt className="text-[10px] uppercase tracking-wide text-[var(--muted)]">{label}</dt>
+      <dd className="font-semibold text-[var(--text)]">{value}</dd>
     </div>
   );
 }

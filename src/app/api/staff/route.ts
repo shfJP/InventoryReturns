@@ -14,7 +14,15 @@ export async function GET() {
   const operationalReportIds = await getOperationalReportEmployeeIds(reportIds);
   const staff = await prisma.user.findMany({
     where: { employeeId: { in: operationalReportIds } },
-    select: { employeeId: true, displayName: true, email: true, isActive: true },
+    select: {
+      employeeId: true,
+      displayName: true,
+      email: true,
+      isActive: true,
+      division: true,
+      department: true,
+      subdivision: true,
+    },
     orderBy: { displayName: "asc" },
   });
   return NextResponse.json(staff);

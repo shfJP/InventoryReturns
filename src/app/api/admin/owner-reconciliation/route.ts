@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { isCurrentUserAdmin } from "@/lib/admin-auth";
 import { prisma } from "@/lib/db";
-import { getMissingReftabAssetRow, getOwnerReconciliationResult, getOwnerReconciliationRow } from "@/lib/owner-reconciliation";
+import { getMissingReftabAssetRow, getOwnerReconciliationRow } from "@/lib/owner-reconciliation";
 import { createAndAssignReftabAsset, fetchReftabCategories, reconcileReftabAssetOwner } from "@/lib/ref-tab";
+import { getCachedOwnerReconciliationResult, invalidateOwnerReconciliationCache } from "@/lib/owner-reconciliation-cache";
+import { getAccessProfile } from "@/lib/access-control";
 
 export const dynamic = "force-dynamic";
 
 const approveSchema = z.object({
-  action: z.enum(["reassign-owner", "add-missing-asset"]).default("reassign-owner"),
+  action: z.enum(["reassign-owner", "add-missing-asset", "record-decision"]).default("reassign-owner"),
   assetTag: z.string().min(1),
   ninjaDeviceId: z.string().min(1),
   serial: z.string().nullable().optional(),
@@ -17,11 +18,15 @@ const approveSchema = z.object({
   categoryId: z.string().min(1).optional(),
   ownerEmployeeId: z.string().min(1).optional(),
   ownerEmail: z.string().email().optional(),
+  decision: z.enum(["YES", "NO", "UNSURE", "DEFER"]).optional(),
+  reason: z.string().max(500).optional(),
+  notes: z.string().max(2_000).optional(),
 });
 
 export async function GET(req: NextRequest) {
-  if (!(await isCurrentUserAdmin(req))) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const access = await getAccessProfile(req);
+  if (!access?.canReconcile) {
+    return NextResponse.json({ error: "Forbidden: reconciliation access is required" }, { status: 403 });
   }
 
   try {
@@ -30,8 +35,35 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ categories });
     }
 
-    const result = await getOwnerReconciliationResult();
-    return NextResponse.json({ ...result, count: result.rows.length });
+    const cached = await getCachedOwnerReconciliationResult(req.nextUrl.searchParams.get("refresh") === "1");
+    const decisions = await prisma.reconciliationDecision.findMany({
+      orderBy: { createdAt: "desc" },
+      select: { assetTag: true, ninjaDeviceId: true, decision: true, createdAt: true, reason: true },
+    });
+    const latestDecisionByKey = new Map<string, typeof decisions[number]>();
+    for (const decision of decisions) {
+      const key = `${decision.assetTag}\u0000${decision.ninjaDeviceId}`;
+      if (!latestDecisionByKey.has(key)) latestDecisionByKey.set(key, decision);
+    }
+    const deferHours = Math.max(Number(process.env.RECONCILIATION_DEFER_HOURS) || 24, 1);
+    const deferCutoff = Date.now() - deferHours * 60 * 60 * 1_000;
+    const suppressesRow = (decision: typeof decisions[number] | undefined) =>
+      Boolean(
+        decision &&
+        (decision.decision !== "DEFER" || decision.createdAt.getTime() > deferCutoff),
+      );
+    const includeDecided = req.nextUrl.searchParams.get("includeDecided") === "1";
+    const rows = includeDecided
+      ? cached.result.rows
+      : cached.result.rows.filter((row) => !suppressesRow(latestDecisionByKey.get(`${row.assetTag}\u0000${row.ninjaDevice.id}`)));
+    return NextResponse.json({
+      ...cached.result,
+      rows,
+      count: rows.length,
+      decisionCount: latestDecisionByKey.size,
+      deferHours,
+      cache: { generatedAt: cached.generatedAt, expiresAt: cached.expiresAt, hit: cached.cacheHit },
+    });
   } catch (e) {
     console.error("[owner-reconciliation] GET failed", e);
     return NextResponse.json({ error: e instanceof Error ? e.message : "Failed to load owner reconciliation" }, { status: 500 });
@@ -39,8 +71,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await isCurrentUserAdmin(req))) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const access = await getAccessProfile(req);
+  if (!access?.canReconcile) {
+    return NextResponse.json({ error: "Forbidden: reconciliation access is required" }, { status: 403 });
   }
 
   try {
@@ -48,6 +81,60 @@ export async function POST(req: NextRequest) {
   const parsed = approveSchema.safeParse(raw);
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid body", details: parsed.error.flatten() }, { status: 400 });
+  }
+
+  if (parsed.data.action === "record-decision") {
+    if (!parsed.data.decision) {
+      return NextResponse.json({ error: "Decision is required" }, { status: 400 });
+    }
+    const row = await getOwnerReconciliationRow(parsed.data.assetTag, parsed.data.ninjaDeviceId);
+    if (!row) {
+      return NextResponse.json({ error: "No current reconciliation row found" }, { status: 404 });
+    }
+    let correctionRequestId: string | null = null;
+    if (parsed.data.decision === "NO" || parsed.data.decision === "UNSURE") {
+      const correction = await prisma.correctionRequest.create({
+        data: {
+          source: "owner_reconciliation",
+          assetTag: row.assetTag,
+          subjectEmployeeId: row.ninjaOwner.employeeId,
+          currentOwnerEmployeeId: row.reftabOwnerEmployeeId,
+          proposedOwnerEmployeeId: row.ninjaOwner.employeeId,
+          ninjaDeviceId: row.ninjaDevice.id,
+          reason: parsed.data.reason?.trim() || (parsed.data.decision === "NO" ? "Suggested owner rejected" : "Owner requires investigation"),
+          details: parsed.data.notes?.trim() || null,
+          requesterEmployeeId: access.user.employeeId,
+          requesterName: access.user.displayName,
+          requesterEmail: access.user.email,
+          status: "OPEN",
+          auditEvents: {
+            create: {
+              action: "CREATED_FROM_RECONCILIATION",
+              newStatus: "OPEN",
+              note: parsed.data.reason?.trim() || null,
+              actorEmployeeId: access.user.employeeId,
+              actorName: access.user.displayName,
+            },
+          },
+        },
+      });
+      correctionRequestId = correction.id;
+    }
+    const decision = await prisma.reconciliationDecision.create({
+      data: {
+        assetTag: row.assetTag,
+        ninjaDeviceId: row.ninjaDevice.id,
+        currentOwnerEmployeeId: row.reftabOwnerEmployeeId,
+        proposedOwnerEmployeeId: row.ninjaOwner.employeeId,
+        decision: parsed.data.decision,
+        reason: parsed.data.reason?.trim() || null,
+        notes: parsed.data.notes?.trim() || null,
+        decidedByEmployeeId: access.user.employeeId,
+        decidedByName: access.user.displayName,
+        correctionRequestId,
+      },
+    });
+    return NextResponse.json({ ok: true, decision, correctionRequestId });
   }
 
   if (parsed.data.action === "add-missing-asset") {
@@ -121,6 +208,7 @@ export async function POST(req: NextRequest) {
           lastSyncedAt: new Date(),
         },
       });
+      await invalidateOwnerReconciliationCache();
 
       return NextResponse.json({ ok: true, result, completed: { action: "add-missing-asset", assetTag: row.assetTag, ninjaDeviceId: parsed.data.ninjaDeviceId } });
     } catch (e) {
@@ -177,6 +265,19 @@ export async function POST(req: NextRequest) {
         lastSyncedAt: new Date(),
       },
     });
+    await prisma.reconciliationDecision.create({
+      data: {
+        assetTag: row.assetTag,
+        ninjaDeviceId: row.ninjaDevice.id,
+        currentOwnerEmployeeId: row.reftabOwnerEmployeeId,
+        proposedOwnerEmployeeId: row.ninjaOwner.employeeId,
+        decision: "YES",
+        reason: "Approved and written to Reftab",
+        decidedByEmployeeId: access.user.employeeId,
+        decidedByName: access.user.displayName,
+      },
+    });
+    await invalidateOwnerReconciliationCache();
 
     return NextResponse.json({ ok: true, result, completed: { action: "reassign-owner", assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id } });
   } catch (e) {
