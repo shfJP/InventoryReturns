@@ -12,6 +12,7 @@ import {
 const equipmentNav = [
   { href: "/", label: "Dashboard", icon: DashboardIcon },
   { href: "/collection", label: "Collection log", icon: CollectionIcon },
+  { href: "/corrections", label: "Correction Requests", icon: CollectionIcon },
 ];
 
 const equipmentReportNav = [
@@ -208,14 +209,6 @@ export default function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: 
                 active={pathname === "/admin/owner-reconciliation"}
                 onClose={onClose}
                 icon={<ReconcileIcon className="h-5 w-5 shrink-0" />}
-                roomy
-              />
-              <SidebarLink
-                href="/corrections"
-                label="Correction Requests"
-                active={pathname === "/corrections"}
-                onClose={onClose}
-                icon={<CollectionIcon className="h-5 w-5 shrink-0" />}
                 roomy
               />
               {isAdmin && (

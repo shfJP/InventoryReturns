@@ -28,7 +28,7 @@ export const PORTAL_MODULES: readonly PortalModuleDefinition[] = [
     shortTitle: "Inventory",
     subtitle: "Reconciliation",
     href: "/admin/owner-reconciliation",
-    description: "Compare Reftab and NinjaOne ownership and route corrections.",
+    description: "Compare Reftab and NinjaOne ownership and resolve discrepancies.",
   },
   {
     id: "organization-analytics",
@@ -53,7 +53,7 @@ export function getPortalModule(id: string | null | undefined): PortalModuleDefi
 }
 
 export function portalModuleForPath(pathname: string): PortalModuleDefinition {
-  if (pathname === "/corrections" || pathname.startsWith("/admin/owner-reconciliation")) {
+  if (pathname.startsWith("/admin/owner-reconciliation")) {
     return getPortalModule("reconciliation")!;
   }
   if (pathname.startsWith("/reports/organization")) {
