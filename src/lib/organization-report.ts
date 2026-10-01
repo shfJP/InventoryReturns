@@ -28,13 +28,15 @@ export async function getOrganizationReport(
   groupBy: OrganizationGroupBy,
   filters: { division?: string | null; department?: string | null } = {},
 ): Promise<OrganizationReport> {
+  const hasDirectorySnapshot = await prisma.directoryEmployeeState.count() > 0;
+  const organizationWhere = {
+    division: filters.division || undefined,
+    department: filters.department || undefined,
+  };
   const [assignments, categoryValues, organizationUsers] = await Promise.all([
     prisma.equipmentAssignment.findMany({
       where: {
-        user: {
-          division: filters.division || undefined,
-          department: filters.department || undefined,
-        },
+        user: organizationWhere,
       },
       include: {
         user: {
@@ -49,19 +51,27 @@ export async function getOrganizationReport(
       },
     }),
     prisma.assetCategoryValue.findMany(),
-    prisma.user.findMany({
-      where: {
-        division: filters.division || undefined,
-        department: filters.department || undefined,
-      },
-      select: {
-        employeeId: true,
-        isActive: true,
-        division: true,
-        department: true,
-        subdivision: true,
-      },
-    }),
+    hasDirectorySnapshot
+      ? prisma.directoryEmployeeState.findMany({
+          where: organizationWhere,
+          select: {
+            employeeId: true,
+            isActive: true,
+            division: true,
+            department: true,
+            subdivision: true,
+          },
+        })
+      : prisma.user.findMany({
+          where: organizationWhere,
+          select: {
+            employeeId: true,
+            isActive: true,
+            division: true,
+            department: true,
+            subdivision: true,
+          },
+        }),
   ]);
 
   const categoryMap = new Map(categoryValues.map((item) => [item.category.trim().toLowerCase(), item.estimatedValueCents]));
