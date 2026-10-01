@@ -108,8 +108,9 @@ Once you set env vars (from `.env.example`) and run the app with a migrated (and
   current user.
 - **Account Remediation** accepts provisioning/access issues from authenticated
   users and gives account-support users a managed, audited queue.
-- **Organization Analytics** groups assets and employees by division,
-  department, or subdivision and reports purchase, replacement, and book value.
+- **Organization Analytics** groups assets and employees by division or
+  department and reports active/inactive headcount plus purchase, replacement,
+  and book value.
   **Admin → Asset Valuations** maintains per-asset values.
 - **Admin → Rollout Readiness** combines a sign-off checklist with live data
   quality counts and configuration checks for a controlled pilot.

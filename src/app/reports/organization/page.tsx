@@ -16,10 +16,10 @@ type ReportRow = {
 
 type Report = {
   generatedAt: string;
-  groupBy: "division" | "department" | "subdivision";
+  groupBy: "division" | "department";
   rows: ReportRow[];
   totals: ReportRow;
-  filters: { divisions: string[]; departments: string[]; subdivisions: string[] };
+  filters: { divisions: string[]; departments: string[] };
 };
 
 function money(cents: number) {
@@ -31,14 +31,13 @@ export default function OrganizationReportPage() {
   const [groupBy, setGroupBy] = useState<Report["groupBy"]>("division");
   const [division, setDivision] = useState("");
   const [department, setDepartment] = useState("");
-  const [subdivision, setSubdivision] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const query = new URLSearchParams({ groupBy });
     if (division) query.set("division", division);
     if (department) query.set("department", department);
-    if (subdivision) query.set("subdivision", subdivision);
+    setError(null);
     fetch(`/api/reports/organization?${query}`)
       .then(async (res) => {
         const data = await res.json();
@@ -47,7 +46,7 @@ export default function OrganizationReportPage() {
       })
       .then(setReport)
       .catch((cause) => setError(cause instanceof Error ? cause.message : "Failed to load"));
-  }, [groupBy, division, department, subdivision]);
+  }, [groupBy, division, department]);
 
   if (error) return <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-800">{error}</div>;
   if (!report) return <p className="text-[var(--muted)]">Loading organizational report…</p>;
@@ -69,15 +68,22 @@ export default function OrganizationReportPage() {
         ], report.rows)}>Export Excel</button>
       </div>
 
-      <div className="grid gap-3 rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-4">
-        <Select label="Group by" value={groupBy} options={["division", "department", "subdivision"]} onChange={(value) => setGroupBy(value as Report["groupBy"])} />
+      <div className="grid gap-3 rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-3">
+        <Select label="Group by" value={groupBy} options={["division", "department"]} onChange={(value) => setGroupBy(value as Report["groupBy"])} />
         <Select label="Division" value={division} options={report.filters.divisions} onChange={setDivision} all />
         <Select label="Department" value={department} options={report.filters.departments} onChange={setDepartment} all />
-        <Select label="Subdivision" value={subdivision} options={report.filters.subdivisions} onChange={setSubdivision} all />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {report.filters.divisions.length === 0 && report.filters.departments.length === 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          Division and department data is not available in the current directory snapshot. Run a directory sync after configuring the organization columns.
+        </div>
+      )}
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
         <Summary label="Employees" value={report.totals.employeeCount.toLocaleString()} />
+        <Summary label="Active employees" value={report.totals.activeEmployeeCount.toLocaleString()} />
+        <Summary label="Inactive employees" value={report.totals.inactiveEmployeeCount.toLocaleString()} />
         <Summary label="Assets" value={report.totals.assetCount.toLocaleString()} />
         <Summary label="Replacement value" value={money(report.totals.replacementValueCents)} />
         <Summary label="Book value" value={money(report.totals.bookValueCents)} />
@@ -89,6 +95,7 @@ export default function OrganizationReportPage() {
             <h2 className="font-semibold text-[var(--text)]">{row.organization}</h2>
             <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
               <span>{row.employeeCount} employees</span><span>{row.assetCount} assets</span>
+              <span>{row.activeEmployeeCount} active</span><span>{row.inactiveEmployeeCount} inactive</span>
               <span>{money(row.replacementValueCents)} replacement</span><span>{money(row.bookValueCents)} book</span>
             </div>
           </article>
@@ -99,6 +106,8 @@ export default function OrganizationReportPage() {
           <thead><tr>
             <th className="table-header capitalize">{groupBy}</th>
             <th className="table-header">Employees</th>
+            <th className="table-header">Active</th>
+            <th className="table-header">Inactive</th>
             <th className="table-header">Assets</th>
             <th className="table-header">Purchase value</th>
             <th className="table-header">Replacement value</th>
@@ -107,6 +116,8 @@ export default function OrganizationReportPage() {
           <tbody>{report.rows.map((row) => <tr key={row.organization}>
             <td className="table-cell font-medium">{row.organization}</td>
             <td className="table-cell">{row.employeeCount}</td>
+            <td className="table-cell">{row.activeEmployeeCount}</td>
+            <td className="table-cell">{row.inactiveEmployeeCount}</td>
             <td className="table-cell">{row.assetCount}</td>
             <td className="table-cell">{money(row.purchaseValueCents)}</td>
             <td className="table-cell">{money(row.replacementValueCents)}</td>

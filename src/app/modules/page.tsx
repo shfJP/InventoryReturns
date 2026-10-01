@@ -8,7 +8,7 @@ type Me = { modules?: string[] };
 const MODULES = [
   { id: "equipment", href: "/", title: "Equipment returns", description: "Direct reports, equipment collection, and IT close-out." },
   { id: "reconciliation", href: "/admin/owner-reconciliation", title: "Inventory reconciliation", description: "Compare Reftab and NinjaOne ownership and route corrections." },
-  { id: "organization-analytics", href: "/reports/organization", title: "Organization analytics", description: "Division, department, subdivision, and equipment-value reporting." },
+  { id: "organization-analytics", href: "/reports/organization", title: "Organization analytics", description: "Division, department, headcount, and equipment-value reporting." },
   { id: "account-remediation", href: "/modules/account-remediation", title: "Account remediation", description: "Report and resolve failed provisioning or account access." },
 ] as const;
 

@@ -170,7 +170,6 @@ export default function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: 
                   window.location.reload();
                 }}
               />
-              <AdminActionButton label="Sync Snowflake" endpoint="/api/admin/sync-snowflake" />
               <SyncButton
                 label="Sync Reftab"
                 endpoint="/api/admin/sync-reftab"
@@ -284,25 +283,6 @@ function SyncButton({
       <span>{label}</span>
     </button>
   );
-}
-
-function AdminActionButton({ label, endpoint }: { label: string; endpoint: string }) {
-  const [running, setRunning] = useState(false);
-  const handleClick = async () => {
-    setRunning(true);
-    try {
-      const response = await fetch(endpoint, { method: "POST" });
-      const data = await response.json();
-      alert(response.ok ? `${label} completed: ${JSON.stringify(data)}` : `${label} failed: ${data.error ?? "Unknown error"}`);
-    } catch {
-      alert(`${label} failed: Network error`);
-    } finally {
-      setRunning(false);
-    }
-  };
-  return <button type="button" onClick={handleClick} disabled={running} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-[var(--text-secondary)] hover:bg-gray-200 disabled:opacity-50">
-    <SyncIcon className={`h-4 w-4 ${running ? "animate-spin text-amber-500" : "text-[var(--muted)]"}`} /><span>{running ? "Syncing Snowflake" : label}</span>
-  </button>;
 }
 
 function BoxIcon({ className }: { className?: string }) {

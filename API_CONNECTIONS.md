@@ -62,9 +62,9 @@ When `DIRECTORY_DATABASE_URL` is set, the lifecycle database is the authoritativ
 | `DIRECTORY_DATABASE_SCHEMA` | `paycom` | Source schema. Must be a simple PostgreSQL identifier. |
 | `DIRECTORY_EMPLOYEE_STATE_TABLE` | `paycom_employee_state` | Source table. Must be a simple PostgreSQL identifier. |
 | `DIRECTORY_SOURCE_NAME` | `paycom` | Source marker written onto target `User` rows. |
-| `DIRECTORY_DIVISION_COLUMN` | empty | Optional source column copied into `DirectoryEmployeeState.division` and `User.division`. Must be a simple identifier. |
-| `DIRECTORY_DEPARTMENT_COLUMN` | empty | Optional source column copied into `DirectoryEmployeeState.department` and `User.department`. Must be a simple identifier. |
-| `DIRECTORY_SUBDIVISION_COLUMN` | empty | Optional source column copied into `DirectoryEmployeeState.subdivision` and `User.subdivision`. Must be a simple identifier. |
+| `DIRECTORY_DIVISION_COLUMN` | `division_desc` | Source column copied into `DirectoryEmployeeState.division` and `User.division`. Set to an empty value to disable it for a custom source. Must be a simple identifier. |
+| `DIRECTORY_DEPARTMENT_COLUMN` | `department_desc` | Source column copied into `DirectoryEmployeeState.department` and `User.department`. Set to an empty value to disable it for a custom source. Must be a simple identifier. |
+| `DIRECTORY_SUBDIVISION_COLUMN` | `sub_division_desc` | Source column copied into `DirectoryEmployeeState.subdivision` and `User.subdivision`. Set to an empty value to disable it for a custom source. Must be a simple identifier. |
 | `DIRECTORY_SYNC_MIN_ROWS` | `100` | Safety floor. A smaller canonical result aborts before stale target rows are deleted. Set this near the expected lower bound in production. |
 | `DIRECTORY_SYNC_BATCH_SIZE` | `500` | Target upsert batch size, clamped to 50–1000. |
 | `DIRECTORY_SYNC_INTERVAL_MINUTES` | `720` | Scheduled directory interval. When explicitly set, this overrides an older value saved in Settings. |
@@ -82,7 +82,7 @@ The source query uses:
 - `termination_date`
 - `last_paycom_sync_at`
 
-When configured, the optional organization columns are also selected. The sync
+The standard Paycom organization columns are selected by default. The sync
 excludes `MERGED_DUPLICATE`, selects one canonical row per trimmed employee
 code, and treats the newest `last_paycom_sync_at` observation as authoritative.
 Lifecycle state and source key are deterministic tie-breakers when timestamps

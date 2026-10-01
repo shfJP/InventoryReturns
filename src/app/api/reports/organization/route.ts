@@ -10,10 +10,9 @@ export async function GET(req: NextRequest) {
   }
   const requested = req.nextUrl.searchParams.get("groupBy");
   const groupBy: OrganizationGroupBy =
-    requested === "department" || requested === "subdivision" ? requested : "division";
+    requested === "department" ? requested : "division";
   return NextResponse.json(await getOrganizationReport(groupBy, {
     division: req.nextUrl.searchParams.get("division"),
     department: req.nextUrl.searchParams.get("department"),
-    subdivision: req.nextUrl.searchParams.get("subdivision"),
   }));
 }

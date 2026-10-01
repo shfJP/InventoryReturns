@@ -20,14 +20,13 @@ export type OrganizationReport = {
   filters: {
     divisions: string[];
     departments: string[];
-    subdivisions: string[];
   };
   totals: OrganizationReportRow;
 };
 
 export async function getOrganizationReport(
   groupBy: OrganizationGroupBy,
-  filters: { division?: string | null; department?: string | null; subdivision?: string | null } = {},
+  filters: { division?: string | null; department?: string | null } = {},
 ): Promise<OrganizationReport> {
   const [assignments, categoryValues, organizationUsers] = await Promise.all([
     prisma.equipmentAssignment.findMany({
@@ -35,7 +34,6 @@ export async function getOrganizationReport(
         user: {
           division: filters.division || undefined,
           department: filters.department || undefined,
-          subdivision: filters.subdivision || undefined,
         },
       },
       include: {
@@ -55,7 +53,6 @@ export async function getOrganizationReport(
       where: {
         division: filters.division || undefined,
         department: filters.department || undefined,
-        subdivision: filters.subdivision || undefined,
       },
       select: {
         employeeId: true,
@@ -146,7 +143,6 @@ export async function getOrganizationReport(
     filters: {
       divisions: unique("division"),
       departments: unique("department"),
-      subdivisions: unique("subdivision"),
     },
   };
 }
