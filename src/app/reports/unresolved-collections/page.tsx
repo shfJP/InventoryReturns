@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { isLoggedIn } from "@/lib/auth-session";
 import { exportRowsToCsv } from "@/lib/csv-export";
+import { formatContactTimestamp } from "@/lib/date-time";
 import { firstNameOnly, formatPersonName } from "@/lib/display-name";
 
 type UnresolvedCollection = {
@@ -110,19 +111,8 @@ function ninjaOneSummary(item: UnresolvedCollection) {
   if (!match) return "";
   const deviceName = match.displayName ?? match.systemName ?? match.netbiosName ?? match.dnsName ?? match.id;
   const user = match.likelyUser ? `; user: ${match.likelyUser}` : "";
-  const contact = match.lastContact ? `; last contact: ${formatNinjaTimestamp(match.lastContact)}` : "";
+  const contact = match.lastContact ? `; last contact: ${formatContactTimestamp(match.lastContact)}` : "";
   return `${deviceName}${user}${contact}`;
-}
-
-function formatNinjaTimestamp(value: string | null | undefined) {
-  if (!value) return "Not available";
-  const numeric = Number(value);
-  if (Number.isFinite(numeric)) {
-    const millis = numeric > 10_000_000_000 ? numeric : numeric * 1000;
-    return new Date(millis).toLocaleString();
-  }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
 function collectionMailtoHref(item: UnresolvedCollection) {
@@ -368,7 +358,7 @@ function UnresolvedTable({
                             <div className="font-medium">{name}</div>
                             <div>{match.likelyUser ? `Likely user: ${match.likelyUser}` : "No user signal"}</div>
                             <div>{match.offline ? "Offline" : "Online or unknown"} · matched by {match.matchReason}</div>
-                            {match.lastContact && <div>Last contact: {formatNinjaTimestamp(match.lastContact)}</div>}
+                            {match.lastContact && <div>Last contact: {formatContactTimestamp(match.lastContact)}</div>}
                           </div>
                         );
                       })}

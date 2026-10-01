@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { isLoggedIn } from "@/lib/auth-session";
+import { formatContactTimestamp } from "@/lib/date-time";
 
 type UserSummary = {
   employeeId: string;
@@ -89,17 +90,6 @@ function ownerLabel(owner: UserSummary | null, fallbackEmployeeId: string) {
 
 function deviceLabel(row: { ninjaDevice: OwnerReconciliationRow["ninjaDevice"] }) {
   return row.ninjaDevice.displayName ?? row.ninjaDevice.systemName ?? row.ninjaDevice.dnsName ?? row.ninjaDevice.netbiosName ?? row.ninjaDevice.id;
-}
-
-function formatDate(value: string | null) {
-  if (!value) return "-";
-  const trimmed = value.trim();
-  const numeric = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
-  const date = Number.isFinite(numeric)
-    ? new Date(numeric < 10_000_000_000 ? numeric * 1000 : numeric)
-    : new Date(trimmed);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
 }
 
 async function readResponseJson(res: Response): Promise<Record<string, unknown>> {
@@ -478,7 +468,7 @@ export default function OwnerReconciliationPage() {
                       {row.matchReason} · {row.confidence}%
                     </span>
                   </td>
-                  <td className="table-cell text-[var(--text-secondary)]">{formatDate(row.ninjaDevice.lastContact ?? row.ninjaDevice.lastUpdate)}</td>
+                  <td className="table-cell text-[var(--text-secondary)]">{formatContactTimestamp(row.ninjaDevice.lastContact ?? row.ninjaDevice.lastUpdate, "-")}</td>
                   <td className="table-cell">
                     <div className="flex flex-wrap gap-1">
                       <button
@@ -592,7 +582,7 @@ export default function OwnerReconciliationPage() {
                       {row.identityReason}
                     </span>
                   </td>
-                  <td className="table-cell text-[var(--text-secondary)]">{formatDate(row.ninjaDevice.lastContact ?? row.ninjaDevice.lastUpdate)}</td>
+                  <td className="table-cell text-[var(--text-secondary)]">{formatContactTimestamp(row.ninjaDevice.lastContact ?? row.ninjaDevice.lastUpdate, "-")}</td>
                   <td className="table-cell">
                     <button
                       type="button"
