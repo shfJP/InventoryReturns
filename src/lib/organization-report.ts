@@ -100,6 +100,11 @@ export async function getOrganizationReport(
       !wasTerminatedMoreThanOneYearAgo(user, terminationCutoff),
   );
   const visibleAssignments = assignments.filter((assignment) => !isInactiveDepartment(assignment.user?.department));
+  const departmentsWithAssets = new Set(
+    visibleAssignments
+      .map((assignment) => assignment.user?.department?.trim())
+      .filter((department): department is string => Boolean(department)),
+  );
   const categoryMap = new Map(categoryValues.map((item) => [item.category.trim().toLowerCase(), item.estimatedValueCents]));
   const groups = new Map<string, OrganizationReportRow>();
   const employeesByGroup = new Map<string, Set<string>>();
@@ -148,7 +153,9 @@ export async function getOrganizationReport(
     row.bookValueCents += book;
   }
 
-  const rows = Array.from(groups.values()).sort((a, b) => b.replacementValueCents - a.replacementValueCents || a.organization.localeCompare(b.organization));
+  const rows = Array.from(groups.values())
+    .filter((row) => groupBy !== "department" || row.assetCount > 0)
+    .sort((a, b) => b.replacementValueCents - a.replacementValueCents || a.organization.localeCompare(b.organization));
   const unique = (key: OrganizationGroupBy) =>
     Array.from(new Set(visibleUsers.map((user) => user[key]).filter((value): value is string => Boolean(value)))).sort();
   const totals = rows.reduce<OrganizationReportRow>((sum, row) => ({
@@ -178,7 +185,7 @@ export async function getOrganizationReport(
     totals,
     filters: {
       divisions: unique("division"),
-      departments: unique("department"),
+      departments: Array.from(departmentsWithAssets).sort(),
     },
   };
 }
