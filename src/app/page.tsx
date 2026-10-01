@@ -2,7 +2,12 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { isLoggedIn, getDashboardViewOrDefault, type DashboardView } from "@/lib/auth-session";
+import { isLoggedIn } from "@/lib/auth-session";
+import {
+  DEFAULT_DASHBOARD_VIEW,
+  isDashboardView,
+  type DashboardView,
+} from "@/lib/dashboard-view";
 import type { DashboardData, Equipment } from "@/types/dashboard";
 import DashboardTable from "@/components/DashboardTable";
 import DashboardCards from "@/components/DashboardCards";
@@ -28,11 +33,6 @@ function DashboardPageInner() {
       router.replace("/login");
       return;
     }
-    setView(getDashboardViewOrDefault());
-  }, [router]);
-
-  useEffect(() => {
-    if (!view) return;
     (async () => {
       try {
         const [meRes, staffRes, eqRes, syncStatusRes] = await Promise.all([
@@ -43,6 +43,7 @@ function DashboardPageInner() {
         ]);
         if (!meRes.ok) throw new Error("Not authenticated");
         const me = await meRes.json();
+        setView(isDashboardView(me.dashboardView) ? me.dashboardView : DEFAULT_DASHBOARD_VIEW);
         const staff = staffRes.ok ? await staffRes.json() : [];
         const equipment = (eqRes.ok ? await eqRes.json() : []) as Equipment[];
         const syncStatus = syncStatusRes.ok ? await syncStatusRes.json() : undefined;
@@ -57,13 +58,13 @@ function DashboardPageInner() {
         setLoading(false);
       }
     })();
-  }, [view]);
+  }, [router]);
 
-  if (!view) return <div className="text-[var(--muted)]">Redirecting…</div>;
   if (loading) return <div className="text-[var(--muted)]">Loading…</div>;
   if (error) return <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">{error}</div>;
   if (!data) return <div className="text-[var(--muted)]">Loading…</div>;
   if (!data.me) return <div className="text-[var(--muted)]">Not signed in. Set CURRENT_USER_EMPLOYEE_ID or run seed.</div>;
+  if (!view) return <div className="text-[var(--muted)]">Loading preferences…</div>;
 
   const Component = VIEW_MAP[view];
   return <Component data={data} initialSearchQuery={initialSearch} />;

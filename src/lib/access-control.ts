@@ -3,6 +3,7 @@ import { getToken } from "next-auth/jwt";
 import { getCurrentUser, type AuthUser } from "./auth";
 import { configuredFlag, configuredIds } from "./access-config";
 import { isSSOConfigured } from "./auth-options";
+import type { PortalModule } from "./portal-modules";
 
 export type PortalRole =
   | "manager"
@@ -11,12 +12,6 @@ export type PortalRole =
   | "reconciler"
   | "executive"
   | "account-support";
-
-export type PortalModule =
-  | "equipment"
-  | "reconciliation"
-  | "organization-analytics"
-  | "account-remediation";
 
 export type AccessProfile = {
   user: AuthUser;

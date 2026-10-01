@@ -7,13 +7,6 @@ import { signOut as nextAuthSignOut, useSession } from "next-auth/react";
 import { logout } from "@/lib/auth-session";
 import { formatPersonName } from "@/lib/display-name";
 
-const moduleDestinations: Record<string, { label: string; href: string }> = {
-  equipment: { label: "Equipment returns", href: "/" },
-  reconciliation: { label: "Inventory reconciliation", href: "/admin/owner-reconciliation" },
-  "organization-analytics": { label: "Organization analytics", href: "/reports/organization" },
-  "account-remediation": { label: "Account remediation", href: "/modules/account-remediation" },
-};
-
 export default function TopBar({ onOpenNavigation }: { onOpenNavigation?: () => void }) {
   const router = useRouter();
   const { data: session } = useSession();
@@ -23,7 +16,6 @@ export default function TopBar({ onOpenNavigation }: { onOpenNavigation?: () => 
   const [syncTime, setSyncTime] = useState<string | null>(null);
   const [ssoEnabled, setSsoEnabled] = useState(false);
   const [avatarFailed, setAvatarFailed] = useState(false);
-  const [modules, setModules] = useState<string[]>(["equipment", "account-remediation"]);
   const helpRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
 
@@ -39,15 +31,6 @@ export default function TopBar({ onOpenNavigation }: { onOpenNavigation?: () => 
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  useEffect(() => {
-    fetch("/api/me")
-      .then((response) => response.ok ? response.json() : null)
-      .then((data) => {
-        if (Array.isArray(data?.modules)) setModules(data.modules);
-      })
-      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -93,19 +76,6 @@ export default function TopBar({ onOpenNavigation }: { onOpenNavigation?: () => 
       <button type="button" onClick={onOpenNavigation} className="rounded-md p-2 text-[var(--text-secondary)] hover:bg-gray-100 md:hidden" aria-label="Open navigation">
         <MenuIcon className="h-5 w-5" />
       </button>
-      <select
-        aria-label="Select module"
-        defaultValue=""
-        onChange={(event) => {
-          const destination = moduleDestinations[event.target.value];
-          if (destination) router.push(destination.href);
-          event.target.value = "";
-        }}
-        className="hidden max-w-48 rounded-md border border-[var(--border)] bg-white px-2 py-1.5 text-xs font-medium text-[var(--text)] sm:block"
-      >
-        <option value="">Switch module…</option>
-        {modules.map((module) => <option key={module} value={module}>{moduleDestinations[module]?.label ?? module}</option>)}
-      </select>
       <form onSubmit={handleGlobalSearch} className="flex min-w-0 flex-1 items-center gap-4">
         <div className="relative w-full max-w-md">
           <SearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]" />

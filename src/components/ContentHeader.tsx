@@ -154,11 +154,11 @@ export default function ContentHeader({
               )}
               {showSettingsLink && (
                 <Link
-                  href="/choose-view"
+                  href="/settings#dashboard-preferences"
                   onClick={() => setSettingsOpen(false)}
                   className="block px-3 py-2 text-sm text-[var(--text)] hover:bg-gray-100"
                 >
-                  Switch dashboard view
+                  Dashboard preference
                 </Link>
               )}
             </div>

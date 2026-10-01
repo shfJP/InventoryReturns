@@ -3,16 +3,18 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import {
+  PORTAL_MODULES,
+  portalModuleForPath,
+  type PortalModule,
+} from "@/lib/portal-modules";
 
-const mainNav = [
-  { href: "/modules", label: "Modules", icon: LayoutIcon },
+const equipmentNav = [
   { href: "/", label: "Dashboard", icon: DashboardIcon },
-  { href: "/choose-view", label: "Switch view", icon: LayoutIcon },
   { href: "/collection", label: "Collection log", icon: CollectionIcon },
-  { href: "/corrections", label: "Corrections", icon: CollectionIcon },
 ];
 
-const reportNav = [
+const equipmentReportNav = [
   { href: "/reports/direct", label: "Direct Reports" },
   { href: "/reports/cascade", label: "Cascade Reports" },
   { href: "/reports/collection-by-period", label: "By Period" },
@@ -26,9 +28,10 @@ type SyncSource = "entra" | "reftab" | "ninjaone";
 export default function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: boolean; onClose?: () => void }) {
   const pathname = usePathname();
   const router = useRouter();
+  const activeModule = portalModuleForPath(pathname);
   const isPublic = pathname === "/login";
   const [isAdmin, setIsAdmin] = useState(false);
-  const [modules, setModules] = useState<string[]>(["equipment", "account-remediation"]);
+  const [modules, setModules] = useState<PortalModule[]>(["equipment", "account-remediation"]);
   const [syncStates, setSyncStates] = useState<Record<SyncSource, SyncState>>({
     entra: "unknown",
     reftab: "unknown",
@@ -102,105 +105,170 @@ export default function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: 
       className={`fixed left-0 top-0 z-40 flex h-full w-[var(--sidebar-width)] flex-col border-r border-[var(--border)] bg-[var(--sidebar-bg)] transition-transform md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}
       style={{ width: "var(--sidebar-width)" }}
     >
-      <div className="flex h-16 items-center gap-2 border-b border-[var(--border)] px-4">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-[var(--accent)] to-purple-600 text-white">
+      <div className="relative flex h-16 items-center gap-2 border-b border-[var(--border)] px-4 transition hover:bg-gray-100 focus-within:ring-2 focus-within:ring-inset focus-within:ring-[var(--accent)]">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-[var(--accent)] to-purple-600 text-white">
           <BoxIcon className="h-5 w-5" />
         </div>
-        <div className="min-w-0">
-          <span className="block truncate font-semibold text-[var(--text)]">Equipment</span>
-          <span className="block truncate text-xs text-[var(--muted)]">Collection Portal</span>
+        <div className="min-w-0 flex-1 pr-6">
+          <span className="block truncate font-semibold text-[var(--text)]">{activeModule.shortTitle}</span>
+          <span className="block truncate text-xs text-[var(--muted)]">{activeModule.subtitle}</span>
         </div>
+        <ChevronDownIcon className="pointer-events-none absolute right-4 h-4 w-4 text-[var(--muted)]" />
+        <select
+          aria-label="Select app"
+          value={activeModule.id}
+          onChange={(event) => {
+            const destination = PORTAL_MODULES.find((module) => module.id === event.target.value);
+            if (destination) {
+              router.push(destination.href);
+              onClose?.();
+            }
+          }}
+          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+        >
+          {PORTAL_MODULES.filter((module) => modules.includes(module.id) || module.id === activeModule.id).map((module) => (
+            <option key={module.id} value={module.id}>{module.title}</option>
+          ))}
+        </select>
       </div>
       {!isPublic && (
         <nav className="flex-1 space-y-0.5 overflow-y-auto p-3">
-          {mainNav.map(({ href, label, icon: Icon }) => {
-            const active = pathname === href;
-            return (
-              <Link
-                key={href}
-                href={href}
-                onClick={onClose}
-                className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
-                  active
-                    ? "bg-[var(--accent)] text-white"
-                    : "text-[var(--text-secondary)] hover:bg-gray-200 hover:text-[var(--text)]"
-                }`}
-              >
-                <Icon className="h-5 w-5 shrink-0" />
-                <span>{label}</span>
-              </Link>
-            );
-          })}
-
-          {/* Reports section */}
-          <div className="mt-4 mb-1 px-3">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">Reports</p>
-          </div>
-          {reportNav.map(({ href, label }) => {
-            const active = pathname === href;
-            return (
-              <Link
-                key={href}
-                href={href}
-                onClick={onClose}
-                className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
-                  active
-                    ? "bg-[var(--accent)] text-white"
-                    : "text-[var(--text-secondary)] hover:bg-gray-200 hover:text-[var(--text)]"
-                }`}
-              >
-                <ReportIcon className="h-4 w-4 shrink-0" />
-                <span>{label}</span>
-              </Link>
-            );
-          })}
-
-          {isAdmin && (
+          {activeModule.id === "equipment" && (
             <>
-              <div className="mt-4 mb-1 px-3">
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">Admin</p>
+              {equipmentNav.map(({ href, label, icon: Icon }) => (
+                <SidebarLink
+                  key={href}
+                  href={href}
+                  label={label}
+                  active={pathname === href}
+                  onClose={onClose}
+                  icon={<Icon className="h-5 w-5 shrink-0" />}
+                  roomy
+                />
+              ))}
+
+              <div className="mb-1 mt-4 px-3">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">Reports</p>
               </div>
-              <SyncButton
-                label="Sync Directory"
-                endpoint="/api/admin/sync-entra"
-                state={syncStates.entra}
-                onStateChange={(state) => setSyncStates((prev) => ({ ...prev, entra: state }))}
-                onComplete={() => {
-                  router.refresh();
-                  window.location.reload();
-                }}
-              />
-              <SyncButton
-                label="Sync Reftab"
-                endpoint="/api/admin/sync-reftab"
-                state={syncStates.reftab}
-                onStateChange={(state) => setSyncStates((prev) => ({ ...prev, reftab: state }))}
-                onComplete={() => {
-                  router.refresh();
-                  window.location.reload();
-                }}
-              />
-              <SyncButton
-                label="Sync NinjaOne"
-                endpoint="/api/admin/sync-ninjaone"
-                state={syncStates.ninjaone}
-                onStateChange={(state) => setSyncStates((prev) => ({ ...prev, ninjaone: state }))}
-                onComplete={() => {
-                  router.refresh();
-                  window.location.reload();
-                }}
-              />
-              <AdminLink href="/admin/asset-values" label="Asset Values" active={pathname === "/admin/asset-values"} onClose={onClose} />
-              <AdminLink href="/admin/asset-valuations" label="Asset Valuations" active={pathname === "/admin/asset-valuations"} onClose={onClose} />
-              <AdminLink href="/admin/directory" label="Directory" active={pathname === "/admin/directory"} onClose={onClose} />
-              <AdminLink href="/admin/reftab-usage" label="Reftab Usage" active={pathname === "/admin/reftab-usage"} onClose={onClose} />
-              <AdminLink href="/admin/return-workflow" label="Return Workflow" active={pathname === "/admin/return-workflow"} onClose={onClose} />
-              <AdminLink href="/admin/rollout" label="Rollout Readiness" active={pathname === "/admin/rollout"} onClose={onClose} />
+              {equipmentReportNav.map(({ href, label }) => (
+                <AdminLink key={href} href={href} label={label} active={pathname === href} onClose={onClose} />
+              ))}
+
+              {isAdmin && (
+                <>
+                  <div className="mb-1 mt-4 px-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">Equipment admin</p>
+                  </div>
+                  <SyncButton
+                    label="Sync Directory"
+                    endpoint="/api/admin/sync-entra"
+                    state={syncStates.entra}
+                    onStateChange={(state) => setSyncStates((prev) => ({ ...prev, entra: state }))}
+                    onComplete={() => {
+                      router.refresh();
+                      window.location.reload();
+                    }}
+                  />
+                  <SyncButton
+                    label="Sync Reftab"
+                    endpoint="/api/admin/sync-reftab"
+                    state={syncStates.reftab}
+                    onStateChange={(state) => setSyncStates((prev) => ({ ...prev, reftab: state }))}
+                    onComplete={() => {
+                      router.refresh();
+                      window.location.reload();
+                    }}
+                  />
+                  <SyncButton
+                    label="Sync NinjaOne"
+                    endpoint="/api/admin/sync-ninjaone"
+                    state={syncStates.ninjaone}
+                    onStateChange={(state) => setSyncStates((prev) => ({ ...prev, ninjaone: state }))}
+                    onComplete={() => {
+                      router.refresh();
+                      window.location.reload();
+                    }}
+                  />
+                  <AdminLink href="/admin/asset-values" label="Asset Values" active={pathname === "/admin/asset-values"} onClose={onClose} />
+                  <AdminLink href="/admin/asset-valuations" label="Asset Valuations" active={pathname === "/admin/asset-valuations"} onClose={onClose} />
+                  <AdminLink href="/admin/directory" label="Directory" active={pathname === "/admin/directory"} onClose={onClose} />
+                  <AdminLink href="/admin/reftab-usage" label="Reftab Usage" active={pathname === "/admin/reftab-usage"} onClose={onClose} />
+                  <AdminLink href="/admin/return-workflow" label="Return Workflow" active={pathname === "/admin/return-workflow"} onClose={onClose} />
+                  <AdminLink href="/admin/rollout" label="Rollout Readiness" active={pathname === "/admin/rollout"} onClose={onClose} />
+                </>
+              )}
             </>
           )}
-          {modules.includes("reconciliation") && <AdminLink href="/admin/owner-reconciliation" label="Owner Reconcile" active={pathname === "/admin/owner-reconciliation"} onClose={onClose} />}
-          {modules.includes("organization-analytics") && <AdminLink href="/reports/organization" label="Organization Analytics" active={pathname === "/reports/organization"} onClose={onClose} />}
-          {modules.includes("account-remediation") && <AdminLink href="/modules/account-remediation" label="Account Remediation" active={pathname === "/modules/account-remediation"} onClose={onClose} />}
+
+          {activeModule.id === "reconciliation" && (
+            <>
+              <SidebarLink
+                href="/admin/owner-reconciliation"
+                label="Ownership Review"
+                active={pathname === "/admin/owner-reconciliation"}
+                onClose={onClose}
+                icon={<ReconcileIcon className="h-5 w-5 shrink-0" />}
+                roomy
+              />
+              <SidebarLink
+                href="/corrections"
+                label="Correction Requests"
+                active={pathname === "/corrections"}
+                onClose={onClose}
+                icon={<CollectionIcon className="h-5 w-5 shrink-0" />}
+                roomy
+              />
+              {isAdmin && (
+                <>
+                  <div className="mb-1 mt-4 px-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted)]">Data sources</p>
+                  </div>
+                  <SyncButton
+                    label="Sync Reftab"
+                    endpoint="/api/admin/sync-reftab"
+                    state={syncStates.reftab}
+                    onStateChange={(state) => setSyncStates((prev) => ({ ...prev, reftab: state }))}
+                    onComplete={() => {
+                      router.refresh();
+                      window.location.reload();
+                    }}
+                  />
+                  <SyncButton
+                    label="Sync NinjaOne"
+                    endpoint="/api/admin/sync-ninjaone"
+                    state={syncStates.ninjaone}
+                    onStateChange={(state) => setSyncStates((prev) => ({ ...prev, ninjaone: state }))}
+                    onComplete={() => {
+                      router.refresh();
+                      window.location.reload();
+                    }}
+                  />
+                </>
+              )}
+            </>
+          )}
+
+          {activeModule.id === "organization-analytics" && (
+            <SidebarLink
+              href="/reports/organization"
+              label="Organization Analytics"
+              active={pathname === "/reports/organization"}
+              onClose={onClose}
+              icon={<ReportIcon className="h-5 w-5 shrink-0" />}
+              roomy
+            />
+          )}
+
+          {activeModule.id === "account-remediation" && (
+            <SidebarLink
+              href="/modules/account-remediation"
+              label="Account Remediation"
+              active={pathname === "/modules/account-remediation"}
+              onClose={onClose}
+              icon={<AccountIcon className="h-5 w-5 shrink-0" />}
+              roomy
+            />
+          )}
         </nav>
       )}
     </aside>
@@ -208,20 +276,46 @@ export default function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: 
   );
 }
 
-function AdminLink({ href, label, active, onClose }: { href: string; label: string; active: boolean; onClose?: () => void }) {
+function SidebarLink({
+  href,
+  label,
+  active,
+  onClose,
+  icon,
+  roomy = false,
+}: {
+  href: string;
+  label: string;
+  active: boolean;
+  onClose?: () => void;
+  icon: React.ReactNode;
+  roomy?: boolean;
+}) {
   return (
     <Link
       href={href}
       onClick={onClose}
-      className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
+      className={`flex items-center gap-3 rounded-lg px-3 ${roomy ? "py-2.5" : "py-2"} text-sm font-medium transition ${
         active
           ? "bg-[var(--accent)] text-white"
           : "text-[var(--text-secondary)] hover:bg-gray-200 hover:text-[var(--text)]"
       }`}
     >
-      <ReportIcon className="h-4 w-4 shrink-0" />
+      {icon}
       <span>{label}</span>
     </Link>
+  );
+}
+
+function AdminLink({ href, label, active, onClose }: { href: string; label: string; active: boolean; onClose?: () => void }) {
+  return (
+    <SidebarLink
+      href={href}
+      label={label}
+      active={active}
+      onClose={onClose}
+      icon={<ReportIcon className="h-4 w-4 shrink-0" />}
+    />
   );
 }
 
@@ -309,14 +403,6 @@ function CollectionIcon({ className }: { className?: string }) {
   );
 }
 
-function LayoutIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
-    </svg>
-  );
-}
-
 function ReportIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -329,6 +415,30 @@ function SyncIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+    </svg>
+  );
+}
+
+function ChevronDownIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+    </svg>
+  );
+}
+
+function ReconcileIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M7 7h10m0 0l-3-3m3 3l-3 3M17 17H7m0 0l3 3m-3-3l3-3" />
+    </svg>
+  );
+}
+
+function AccountIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM5 21a7 7 0 0114 0" />
     </svg>
   );
 }

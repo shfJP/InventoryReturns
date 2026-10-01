@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import { formatPersonName } from "@/lib/display-name";
+import {
+  DEFAULT_DASHBOARD_VIEW,
+  type DashboardView,
+} from "@/lib/dashboard-view";
 
 type ApiUser = {
   employeeId: string;
@@ -10,6 +14,7 @@ type ApiUser = {
   email: string;
   isManager: boolean;
   isAdmin?: boolean;
+  dashboardView?: DashboardView;
 };
 
 type SyncSettings = {
@@ -50,6 +55,9 @@ export default function SettingsPage() {
   const [syncStatus, setSyncStatus] = useState<SyncStatusResponse | null>(null);
   const [savingSyncSettings, setSavingSyncSettings] = useState(false);
   const [syncSettingsMessage, setSyncSettingsMessage] = useState<string | null>(null);
+  const [dashboardView, setDashboardView] = useState<DashboardView>(DEFAULT_DASHBOARD_VIEW);
+  const [savingPreferences, setSavingPreferences] = useState(false);
+  const [preferencesMessage, setPreferencesMessage] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/auth/config")
@@ -61,6 +69,7 @@ export default function SettingsPage() {
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         setUser(data);
+        setDashboardView(data?.dashboardView ?? DEFAULT_DASHBOARD_VIEW);
         if (data?.isAdmin) {
           fetch("/api/admin/sync-settings")
             .then((r) => (r.ok ? r.json() : null))
@@ -78,6 +87,26 @@ export default function SettingsPage() {
   const name = formatPersonName(user?.displayName ?? session?.user?.name) || "User";
   const email = user?.email ?? session?.user?.email ?? "";
   const employeeId = user?.employeeId ?? "";
+
+  async function savePreferences() {
+    setSavingPreferences(true);
+    setPreferencesMessage(null);
+    try {
+      const res = await fetch("/api/me/preferences", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dashboardView }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to save preferences");
+      setDashboardView(data.dashboardView);
+      setPreferencesMessage("Dashboard preference saved to your profile.");
+    } catch (e) {
+      setPreferencesMessage(e instanceof Error ? e.message : "Failed to save preferences");
+    } finally {
+      setSavingPreferences(false);
+    }
+  }
 
   async function saveSyncSettings() {
     if (!syncSettings) return;
@@ -148,6 +177,63 @@ export default function SettingsPage() {
             </dd>
           </div>
         </dl>
+      </section>
+
+      <section id="dashboard-preferences" className="scroll-mt-20 rounded-lg border border-[var(--border)] bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">Dashboard preferences</h2>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              Choose the default Equipment Returns dashboard view stored with your user profile.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={savePreferences}
+            disabled={savingPreferences}
+            className="rounded-lg bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-50"
+          >
+            {savingPreferences ? "Saving" : "Save preference"}
+          </button>
+        </div>
+
+        <fieldset className="mt-4 grid gap-3 sm:grid-cols-3">
+          <legend className="sr-only">Default dashboard view</legend>
+          {([
+            ["table", "Table view", "Fast scanning of staff and equipment counts."],
+            ["cards", "Staff cards", "People-focused cards with assigned equipment."],
+            ["assets", "Asset-centric", "Return logistics organized by individual asset."],
+          ] as const).map(([value, label, description]) => (
+            <label
+              key={value}
+              className={`cursor-pointer rounded-lg border p-3 transition ${
+                dashboardView === value
+                  ? "border-[var(--accent)] bg-purple-50"
+                  : "border-[var(--border)] hover:bg-gray-50"
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="dashboardView"
+                  value={value}
+                  checked={dashboardView === value}
+                  onChange={() => {
+                    setDashboardView(value);
+                    setPreferencesMessage(null);
+                  }}
+                  className="h-4 w-4"
+                />
+                <span className="text-sm font-medium text-[var(--text)]">{label}</span>
+              </span>
+              <span className="mt-2 block text-xs text-[var(--muted)]">{description}</span>
+            </label>
+          ))}
+        </fieldset>
+
+        {preferencesMessage && (
+          <p className="mt-3 text-sm text-[var(--muted)]">{preferencesMessage}</p>
+        )}
       </section>
 
       {user?.isAdmin && syncSettings && (
