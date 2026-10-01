@@ -1,5 +1,6 @@
 import type { EquipmentAssignment, NinjaOneDevice, User } from "@prisma/client";
 import { prisma } from "./db";
+import { isDeviceLocalWindowsAccount } from "./ninja-user";
 
 type EquipmentWithUser = EquipmentAssignment & {
   user: Pick<User, "employeeId" | "displayName" | "email" | "upn" | "isActive"> | null;
@@ -143,7 +144,12 @@ function buildUserAliasMap(users: UserSummary[]): Map<string, UserSummary> {
   return aliases;
 }
 
-function resolveLikelyUser(rawLikelyUser: string | null, aliases: Map<string, UserSummary>): UserSummary | null {
+function resolveLikelyUser(
+  rawLikelyUser: string | null,
+  aliases: Map<string, UserSummary>,
+  device: NinjaOneDevice,
+): UserSummary | null {
+  if (isDeviceLocalWindowsAccount(rawLikelyUser, device)) return null;
   const direct = normalizeAlias(rawLikelyUser);
   if (!direct) return null;
   return aliases.get(direct) ?? aliases.get(aliasLocalPart(direct) ?? "") ?? aliases.get(normalizeText(direct)) ?? null;
@@ -613,7 +619,7 @@ export async function getOwnerReconciliationResult(): Promise<OwnerReconciliatio
       continue;
     }
 
-    const ninjaOwner = resolveLikelyUser(ninjaOwnerRaw, aliases);
+    const ninjaOwner = resolveLikelyUser(ninjaOwnerRaw, aliases, match.device);
     if (!ninjaOwner) {
       summary.unresolvedNinjaOwnerCount += 1;
       continue;
@@ -635,7 +641,7 @@ export async function getOwnerReconciliationResult(): Promise<OwnerReconciliatio
     if (hasReftabMatchForDevice(identity, equipmentIdentifiers, equipment)) continue;
 
     const ninjaOwnerRaw = ownerRaw;
-    const ninjaOwner = ninjaOwnerRaw ? resolveLikelyUser(ninjaOwnerRaw, aliases) : null;
+    const ninjaOwner = ninjaOwnerRaw ? resolveLikelyUser(ninjaOwnerRaw, aliases, device) : null;
     if (!ninjaOwnerRaw) {
       summary.missingNinjaOwnerCount += 1;
     } else if (!ninjaOwner) {
