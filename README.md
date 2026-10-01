@@ -110,7 +110,8 @@ Once you set env vars (from `.env.example`) and run the app with a migrated (and
   users and gives account-support users a managed, audited queue.
 - **Organization Analytics** groups assets and employees by division or
   department using the current directory snapshot and reports active/inactive
-  headcount plus purchase, replacement, and book value.
+  headcount plus purchase, replacement, and book value. Headcount excludes
+  employees whose termination date is more than one year old.
   **Admin → Asset Valuations** maintains per-asset values.
 - **Admin → Rollout Readiness** combines a sign-off checklist with live data
   quality counts and configuration checks for a controlled pilot.

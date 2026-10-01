@@ -28,10 +28,22 @@ function isInactiveDepartment(department: string | null | undefined): boolean {
   return /^\(inactive\)/i.test(department?.trim() ?? "");
 }
 
+function wasTerminatedMoreThanOneYearAgo(
+  employee: { employmentStatus: string | null; terminationDate: Date | null },
+  cutoff: Date,
+): boolean {
+  const status = employee.employmentStatus?.trim().toUpperCase();
+  return (status === "T" || status === "TERMINATED") &&
+    employee.terminationDate !== null &&
+    employee.terminationDate < cutoff;
+}
+
 export async function getOrganizationReport(
   groupBy: OrganizationGroupBy,
   filters: { division?: string | null; department?: string | null } = {},
 ): Promise<OrganizationReport> {
+  const terminationCutoff = new Date();
+  terminationCutoff.setUTCFullYear(terminationCutoff.getUTCFullYear() - 1);
   const hasDirectorySnapshot = await prisma.directoryEmployeeState.count() > 0;
   const organizationWhere = {
     division: filters.division || undefined,
@@ -61,6 +73,8 @@ export async function getOrganizationReport(
           select: {
             employeeId: true,
             isActive: true,
+            employmentStatus: true,
+            terminationDate: true,
             division: true,
             department: true,
             subdivision: true,
@@ -71,6 +85,8 @@ export async function getOrganizationReport(
           select: {
             employeeId: true,
             isActive: true,
+            employmentStatus: true,
+            terminationDate: true,
             division: true,
             department: true,
             subdivision: true,
@@ -78,7 +94,11 @@ export async function getOrganizationReport(
         }),
   ]);
 
-  const visibleUsers = organizationUsers.filter((user) => !isInactiveDepartment(user.department));
+  const visibleUsers = organizationUsers.filter(
+    (user) =>
+      !isInactiveDepartment(user.department) &&
+      !wasTerminatedMoreThanOneYearAgo(user, terminationCutoff),
+  );
   const visibleAssignments = assignments.filter((assignment) => !isInactiveDepartment(assignment.user?.department));
   const categoryMap = new Map(categoryValues.map((item) => [item.category.trim().toLowerCase(), item.estimatedValueCents]));
   const groups = new Map<string, OrganizationReportRow>();
