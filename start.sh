@@ -8,11 +8,8 @@ fi
 
 echo "==> DATABASE_URL is configured."
 
-echo "==> Running prisma db push (create/sync tables)..."
-npx prisma db push --skip-generate --accept-data-loss 2>&1
-
-echo "==> Importing historical reconciliation decisions into the audit log..."
-npx tsx scripts/backfill-reconciliation-audit.ts 2>&1
+echo "==> Preparing database schema and reconciliation audit history..."
+npm run db:prepare 2>&1
 
 if [ "${CLEAN_DEMO_DATA_ON_STARTUP:-true}" = "true" ]; then
   echo "==> Removing demo seed data if present..."

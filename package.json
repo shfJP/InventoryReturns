@@ -8,9 +8,11 @@
   "scripts": {
     "dev": "next dev --turbo",
     "build": "prisma generate && next build",
+    "prestart": "npm run db:prepare",
     "start": "next start",
     "lint": "next lint",
     "db:push": "prisma db push",
+    "db:prepare": "prisma db push --skip-generate && tsx scripts/backfill-reconciliation-audit.ts",
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
     "postinstall": "prisma generate"

@@ -259,6 +259,15 @@ Exactly one channel is used, driven by `NOTIFICATION_PROVIDER` and the correspon
 - `npm run dev` – dev server
 - `npm run build` – Prisma generate + Next build
 - `npm run db:push` – push schema (no migrations)
+- `npm run db:prepare` – synchronize the schema and import historical reconciliation decisions. Both `start.sh` and `npm start` run this before serving requests. Startup stops if synchronization fails; it does not automatically accept destructive schema changes.
+
+If reconciliation reports a missing column such as
+`NinjaOneDevice.loginHistoryStartedAt`, the running application's Prisma client
+is newer than the connected database schema. In the deployed app container,
+with its production `DATABASE_URL`, run `npm run db:prepare`, then restart the
+application. Use `sh start.sh` as the deployment start command so the background
+sync worker also runs. A direct `node server.js` command bypasses database
+preparation and must have `npm run db:prepare` configured as a deployment step.
 - `npm run db:seed` – seed users + equipment
 - `npm run db:studio` – Prisma Studio
 
