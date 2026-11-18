@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAccessProfile } from "@/lib/access-control";
 import { prisma } from "@/lib/db";
 import { getOwnerReconciliationResult } from "@/lib/owner-reconciliation";
-import { buildReconciliationWorkbook } from "@/lib/reconciliation-report";
+import { buildReconciliationWorkbook, historicalOwnerChangeReason, mergeReconciliationCompletions } from "@/lib/reconciliation-report";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -14,19 +14,26 @@ export async function GET(req: NextRequest) {
   }
   try {
     // Bypass the page cache and all search, pagination and decision suppression.
-    const [result, audits, reftab, ninja] = await Promise.all([
+    const [result, audits, decisions, reftab, ninja] = await Promise.all([
       getOwnerReconciliationResult(),
       prisma.reconciliationAudit.findMany({
         where: { status: "SUCCEEDED", action: { in: ["reassign-owner", "add-missing-asset", "decommission-missing-asset"] } },
-        select: { assetTag: true, ninjaDeviceId: true, action: true, status: true, completedAt: true, actorName: true },
+        select: { assetTag: true, ninjaDeviceId: true, action: true, status: true, completedAt: true, actorName: true, decisionId: true },
         orderBy: { completedAt: "desc" },
+      }),
+      prisma.reconciliationDecision.findMany({
+        where: { decision: "YES", reason: historicalOwnerChangeReason },
+        select: {
+          id: true, assetTag: true, ninjaDeviceId: true, decision: true, reason: true,
+          createdAt: true, decidedByName: true, decidedByEmployeeId: true,
+        },
       }),
       prisma.equipmentAssignment.aggregate({ _max: { lastSyncedAt: true } }),
       prisma.ninjaOneDevice.aggregate({ _max: { lastSyncedAt: true } }),
     ]);
     const generatedAt = new Date();
     const buffer = await buildReconciliationWorkbook({
-      items: result.reportItems, audits, generatedAt,
+      items: result.reportItems, audits: mergeReconciliationCompletions(audits, decisions), generatedAt,
       reftabSyncedAt: reftab._max.lastSyncedAt, ninjaSyncedAt: ninja._max.lastSyncedAt,
     });
     return new Response(new Uint8Array(buffer), {

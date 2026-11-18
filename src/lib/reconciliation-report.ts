@@ -8,9 +8,49 @@ export type ReportCompletion = {
   status: string;
   completedAt: Date | null;
   actorName: string;
+  decisionId?: string | null;
+  evidenceSource?: string;
 };
 
 const completionActions = new Set(["reassign-owner", "add-missing-asset", "decommission-missing-asset"]);
+
+export const historicalOwnerChangeReason = "Approved and written to Reftab";
+
+type HistoricalDecision = {
+  id: string;
+  assetTag: string;
+  ninjaDeviceId: string;
+  decision: string;
+  reason: string | null;
+  createdAt: Date;
+  decidedByName: string | null;
+  decidedByEmployeeId: string;
+};
+
+export function mergeReconciliationCompletions(audits: ReportCompletion[], decisions: HistoricalDecision[]): ReportCompletion[] {
+  const linkedSuccesses = new Set(audits.filter((audit) =>
+    audit.status === "SUCCEEDED" && completionActions.has(audit.action) && audit.completedAt,
+  ).map((audit) => audit.decisionId).filter(Boolean));
+  const historical = decisions.filter((decision) =>
+    // YES alone also represented manual reviews in the earlier API. This
+    // automatic reason was written only after the owner change succeeded.
+    decision.decision === "YES" && decision.reason === historicalOwnerChangeReason &&
+    !linkedSuccesses.has(decision.id),
+  ).map((decision): ReportCompletion => ({
+    assetTag: decision.assetTag,
+    ninjaDeviceId: decision.ninjaDeviceId,
+    decisionId: decision.id,
+    action: "reassign-owner",
+    status: "SUCCEEDED",
+    completedAt: decision.createdAt,
+    actorName: decision.decidedByName ?? decision.decidedByEmployeeId,
+    evidenceSource: "Historical successful owner decision",
+  }));
+  return [
+    ...audits.map((audit) => ({ ...audit, evidenceSource: audit.evidenceSource ?? "Successful audit completion" })),
+    ...historical,
+  ].sort((a, b) => (b.completedAt?.getTime() ?? 0) - (a.completedAt?.getTime() ?? 0));
+}
 
 export function summarizeReconciliation(items: ReconciliationReportItem[], audits: ReportCompletion[], now: Date) {
   const weekStart = new Date(now.getTime() - 7 * 86_400_000);
@@ -52,7 +92,7 @@ export async function buildReconciliationWorkbook(input: {
     ["Latest Reftab record sync (UTC)", input.reftabSyncedAt?.toISOString() ?? "No synced records"],
     ["Latest Ninja record sync (UTC)", input.ninjaSyncedAt?.toISOString() ?? "No synced records"],
     ["Items needing reconciliation now", totals.outstanding, "All outstanding statuses below, including deferred and rejected reviews still unresolved."],
-    ["Items reconciled — all time", totals.reconciledTotal, "Distinct devices with successful owner changes, Reftab imports, or Reftab decommission imports in recorded audit history."],
+    ["Items reconciled — all time", totals.reconciledTotal, "Distinct devices with successful owner changes, Reftab imports, or Reftab decommission imports in audit history, plus historical decisions recording successful owner writes to Reftab."],
     ["Items reconciled — past seven days", totals.reconciledWeek, "Distinct devices with a successful completion during the stated seven-day window."],
     ["Items missing from Ninja", totals.missingNinja, "Distinct Reftab asset tags with no eligible Ninja match."],
     ["Items missing from Reftab", totals.missingReftab, "Eligible Ninja devices with no Reftab match."],
@@ -61,7 +101,7 @@ export async function buildReconciliationWorkbook(input: {
     ["Scope", "", "Uses the reconciliation matching rules. Windows Server, Linux and reserved decommissions are excluded from eligible Ninja devices. Unmatched Reftab items may include non-computer equipment."],
     ["Freshness", "", "Recalculated on export from the latest synced portal data; exporting does not run an external system sync."],
     ["History", "", "NO, UNSURE, DEFER, failed and pending attempts are not completed reconciliations. Historical completions can recur in today's outstanding list; these are separate measures, not an additive total."],
-    ["Coverage", "", "Historical totals cover recorded successful audit completions. Changes made outside the portal or before audit tracking may not be included."],
+    ["Coverage", "", "Includes successful audit completions and earlier YES decisions marked 'Approved and written to Reftab', using their original dates. Earlier imports without a completion record and changes outside the portal cannot be counted."],
   ]);
   for (const status of ["Owner mismatch", "No owner signal", "Owner not in directory", "Inactive owner"] as const) {
     summary.addRow([status, input.items.filter((item) => item.status === status).length, "Outstanding items by current status."]);
@@ -84,9 +124,11 @@ export async function buildReconciliationWorkbook(input: {
     { header: "Completed at (UTC)", key: "completed", width: 30 },
     { header: "Past seven days", key: "pastWeek", width: 20 },
     { header: "Completed by", key: "actorName", width: 30 },
+    { header: "Evidence source", key: "evidenceSource", width: 44 },
   ];
   history.addRows(totals.completions.map((audit) => ({
     ...audit, completed: audit.completedAt!.toISOString(),
+    evidenceSource: audit.evidenceSource ?? "Successful audit completion",
     pastWeek: audit.completedAt! >= totals.weekStart ? "Yes" : "No",
   })));
   for (const sheet of workbook.worksheets) {

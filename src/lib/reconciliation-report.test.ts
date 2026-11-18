@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
-import { buildReconciliationWorkbook, summarizeReconciliation, type ReportCompletion } from "./reconciliation-report";
+import { buildReconciliationWorkbook, historicalOwnerChangeReason, mergeReconciliationCompletions, summarizeReconciliation, type ReportCompletion } from "./reconciliation-report";
 import type { ReconciliationReportItem } from "./owner-reconciliation";
 
 const now = new Date("2026-11-18T15:00:00Z");
@@ -37,6 +37,43 @@ test("counts current needs independently of unique successful historical complet
   assert.equal(result.reconciledWeek, 3);
   assert.equal(result.completions.length, 5);
   assert.equal(summarizeReconciliation([], [], now).reconciledWeek, 0);
+});
+
+test("includes historical successful owner writes with original dates and excludes ordinary reviews", async () => {
+  const decision = (id: string, device: string, date: string, reason: string | null = historicalOwnerChangeReason, value = "YES") => ({
+    id, assetTag: device, ninjaDeviceId: device, createdAt: new Date(date),
+    decision: value, reason, decidedByName: null, decidedByEmployeeId: "technician",
+  });
+  const decisions = [
+    decision("old", "1", "2026-11-10T15:00:00Z"),
+    decision("recent", "2", "2026-11-11T15:00:00Z"),
+    decision("repeat", "2", "2026-11-17T15:00:00Z"),
+    decision("linked", "3", "2026-11-17T15:00:00Z"),
+    decision("manual", "4", "2026-11-17T15:00:00Z", "Manual approval"),
+    decision("no-reason", "5", "2026-11-17T15:00:00Z", null),
+    decision("rejected", "6", "2026-11-17T15:00:00Z", historicalOwnerChangeReason, "NO"),
+  ];
+  const recordedAudit = { ...audit("2", "2026-11-11T15:00:00Z", "record-decision", "RECORDED"), decisionId: "recent" };
+  const successfulAudit = { ...audit("3", "2026-11-17T15:00:00Z"), decisionId: "linked" };
+  const merged = mergeReconciliationCompletions([recordedAudit, successfulAudit], decisions);
+  const totals = summarizeReconciliation(items, merged, now);
+  assert.equal(totals.reconciledTotal, 3);
+  assert.equal(totals.reconciledWeek, 2);
+  assert.equal(totals.completions.length, 4);
+  assert.equal(totals.completions.filter((completion) => completion.decisionId === "linked").length, 1);
+  assert.equal(totals.completions.find((completion) => completion.decisionId === "old")!.completedAt!.toISOString(), decisions[0].createdAt.toISOString());
+  assert.equal(totals.completions.find((completion) => completion.decisionId === "recent")!.actorName, "technician");
+
+  // Regression for the original zero-total export when only legacy decisions exist.
+  const bytes = await buildReconciliationWorkbook({
+    items, audits: mergeReconciliationCompletions([], decisions), generatedAt: now,
+    reftabSyncedAt: null, ninjaSyncedAt: null,
+  });
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(bytes);
+  assert.equal(workbook.getWorksheet("Summary")!.getCell("B7").value, 3);
+  assert.equal(workbook.getWorksheet("Summary")!.getCell("B8").value, 2);
+  assert.equal(workbook.getWorksheet("Completed changes")!.getCell("G2").value, "Historical successful owner decision");
 });
 
 test("builds a readable XLSX with numeric totals, evidence and literal source strings", async () => {
