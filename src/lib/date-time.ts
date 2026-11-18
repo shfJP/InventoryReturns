@@ -10,11 +10,8 @@ const contactTimeFormatter = new Intl.DateTimeFormat("en-US", {
   hour12: true,
 });
 
-export function formatContactTimestamp(
-  value: string | null | undefined,
-  unavailable = "Not available",
-): string {
-  if (!value) return unavailable;
+export function parseContactTimestamp(value: string | null | undefined): Date | null {
+  if (!value?.trim()) return null;
 
   const trimmed = value.trim();
   // NinjaOne can return Unix seconds with a fractional component
@@ -26,6 +23,15 @@ export function formatContactTimestamp(
     ? new Date(Math.abs(numeric) < 10_000_000_000 ? numeric * 1000 : numeric)
     : new Date(trimmed);
 
-  if (Number.isNaN(date.getTime())) return value;
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function formatContactTimestamp(
+  value: string | null | undefined,
+  unavailable = "Not available",
+): string {
+  if (!value) return unavailable;
+  const date = parseContactTimestamp(value);
+  if (!date) return value;
   return `${contactDateFormatter.format(date)} ${contactTimeFormatter.format(date)}`;
 }

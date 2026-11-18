@@ -1,5 +1,6 @@
 import { prisma } from "./db";
 import { fetchWithTimeout } from "./fetch-timeout";
+import { loginFromSnapshot } from "./ninja-login-evidence";
 
 const NINJAONE_BASE_URL = (process.env.NINJAONE_BASE_URL ?? "https://app.ninjarmm.com").replace(/\/$/, "");
 const NINJAONE_CLIENT_ID = (process.env.NINJAONE_CLIENT_ID ?? "").trim();
@@ -32,6 +33,7 @@ type NormalizedNinjaOneDevice = {
   lastContact?: string;
   lastUpdate?: string;
   likelyUser?: string;
+  loginHistoryCheckedAt?: Date;
   detailsJson: string;
 };
 
@@ -43,6 +45,52 @@ export type NinjaOneSyncResult = {
 
 export function isNinjaOneConfigured(): boolean {
   return Boolean(NINJAONE_CLIENT_ID && NINJAONE_CLIENT_SECRET);
+}
+
+export class NinjaOneWriteError extends Error {
+  constructor(message: string, public readonly outcome: "rejected" | "uncertain") {
+    super(message);
+    this.name = "NinjaOneWriteError";
+  }
+}
+
+export function canDecommissionNinjaOne(): boolean {
+  return isNinjaOneConfigured() && NINJAONE_SCOPE.split(/\s+/).includes("management");
+}
+
+export async function getNinjaOneDecommissionDevice(id: string) {
+  const token = await getNinjaOneAccessToken();
+  const device = await fetchNinjaOneJson(token, `/api/v2/device/${encodeURIComponent(id)}`, `NinjaOne device ${id}`);
+  if (!device || typeof device !== "object" || Array.isArray(device)) {
+    throw new Error("Could not verify the current NinjaOne device. Check API permissions and try again.");
+  }
+  const record = device as Record<string, unknown>;
+  if (String(record.id) !== id) throw new Error("NinjaOne returned a different device.");
+  return {
+    id, uid: valueToString(record.uid) ?? null,
+    offline: typeof record.offline === "boolean" ? record.offline : null,
+    lastContact: valueToString(record.lastContact) ?? null,
+    approvalStatus: valueToString(record.approvalStatus) ?? null,
+  };
+}
+
+export async function decommissionNinjaOneDevice(id: string): Promise<{ ninjaDeviceId: string; action: string }> {
+  // Public API supports decommissioning managed devices, not DELETE /device/{id}.
+  if (!NINJAONE_SCOPE.split(/\s+/).includes("management")) {
+    throw new NinjaOneWriteError("NinjaOne removal requires NINJAONE_SCOPE to include management and an OAuth client authorized for that scope.", "rejected");
+  }
+  const token = await getNinjaOneAccessToken();
+  const response = await fetchWithTimeout(
+    `${NINJAONE_BASE_URL}/api/v2/device/${encodeURIComponent(id)}/decommission`,
+    { method: "POST", headers: { Accept: "application/json", Authorization: `Bearer ${token}` }, cache: "no-store" },
+    NINJAONE_TIMEOUT_MS, `NinjaOne decommission device ${id}`,
+  ).catch((error) => { throw new NinjaOneWriteError(error instanceof Error ? error.message : String(error), "uncertain"); });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new NinjaOneWriteError(`NinjaOne decommission returned ${response.status}: ${text}`,
+      response.status >= 500 || response.status === 408 ? "uncertain" : "rejected");
+  }
+  return { ninjaDeviceId: id, action: "decommission" };
 }
 
 function valueToString(value: unknown): string | undefined {
@@ -320,6 +368,8 @@ function normalizeDevice(record: NinjaOneDeviceRecord): NormalizedNinjaOneDevice
     lastContact: valueToString(record.lastContact),
     lastUpdate: valueToString(record.lastUpdate),
     likelyUser: findLikelyUser(record),
+    loginHistoryCheckedAt: record.lastLoggedOnUser != null && typeof record.lastLoggedOnUser === "object" && !Array.isArray(record.lastLoggedOnUser)
+      ? new Date() : undefined,
     detailsJson: JSON.stringify(record),
   };
 }
@@ -334,28 +384,45 @@ export async function syncNinjaOneToDb(): Promise<NinjaOneSyncResult> {
 
   let upserted = 0;
   for (const device of normalized) {
-    await prisma.ninjaOneDevice.upsert({
-      where: { id: device.id },
-      update: {
-        displayName: device.displayName,
-        systemName: device.systemName,
-        dnsName: device.dnsName,
-        netbiosName: device.netbiosName,
-        organizationId: device.organizationId,
-        locationId: device.locationId,
-        nodeClass: device.nodeClass,
-        approvalStatus: device.approvalStatus,
-        offline: device.offline,
-        lastContact: device.lastContact,
-        lastUpdate: device.lastUpdate,
-        likelyUser: device.likelyUser,
-        detailsJson: device.detailsJson,
-        lastSyncedAt: now,
-      },
-      create: {
-        ...device,
-        lastSyncedAt: now,
-      },
+    const observation = loginFromSnapshot(JSON.parse(device.detailsJson).lastLoggedOnUser, now);
+    await prisma.$transaction(async (tx) => {
+      await tx.ninjaOneDevice.upsert({
+        where: { id: device.id },
+        update: {
+          displayName: device.displayName,
+          systemName: device.systemName,
+          dnsName: device.dnsName,
+          netbiosName: device.netbiosName,
+          organizationId: device.organizationId,
+          locationId: device.locationId,
+          nodeClass: device.nodeClass,
+          approvalStatus: device.approvalStatus,
+          offline: device.offline,
+          lastContact: device.lastContact,
+          lastUpdate: device.lastUpdate,
+          likelyUser: device.likelyUser,
+          detailsJson: device.detailsJson,
+          lastSyncedAt: now,
+          loginHistoryCheckedAt: device.loginHistoryCheckedAt,
+        },
+        create: {
+          ...device,
+          lastSyncedAt: now,
+          loginHistoryStartedAt: device.loginHistoryCheckedAt,
+        },
+      });
+      if (device.loginHistoryCheckedAt) {
+        await tx.ninjaOneDevice.updateMany({
+          where: { id: device.id, loginHistoryStartedAt: null },
+          data: { loginHistoryStartedAt: device.loginHistoryCheckedAt },
+        });
+      }
+      if (observation) {
+        await tx.ninjaOneLoginObservation.createMany({
+          data: [{ deviceId: device.id, ...observation, firstSeenAt: now }],
+          skipDuplicates: true,
+        });
+      }
     });
     upserted += 1;
   }
@@ -368,6 +435,9 @@ export async function syncNinjaOneToDb(): Promise<NinjaOneSyncResult> {
   for (const staleChunk of chunks(staleIds, 500)) {
     removed += (await prisma.ninjaOneDevice.deleteMany({ where: { id: { in: staleChunk } } })).count;
   }
+  await prisma.ninjaOneLoginObservation.deleteMany({
+    where: { loggedOnAt: { lt: new Date(now.getTime() - 90 * 86_400_000) } },
+  });
 
   console.info(`[ninjaone] Synced ${upserted} device(s); removed ${removed} stale device(s).`);
   return { fetched: fetchedDevices.length, upserted, removed };

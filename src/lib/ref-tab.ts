@@ -1,6 +1,7 @@
 import { createHash, createHmac } from "crypto";
 import { prisma } from "./db";
 import { fetchWithTimeout } from "./fetch-timeout";
+import { ReftabWriteError } from "./reftab-write-error";
 
 /**
  * Reftab integration — see https://www.reftab.com/api-docs
@@ -35,6 +36,7 @@ const REF_TAB_CREATE_ASSET_LAPTOP_CATEGORY_ID = (process.env.REF_TAB_CREATE_ASSE
 const REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID = (process.env.REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID ?? "").trim();
 const REF_TAB_CREATE_ASSET_LOCATION_ID = (process.env.REF_TAB_CREATE_ASSET_LOCATION_ID ?? "67497").trim();
 const REF_TAB_CREATE_ASSET_SERVICE_TAG_FIELD = (process.env.REF_TAB_CREATE_ASSET_SERVICE_TAG_FIELD ?? "Service Tag").trim();
+const REF_TAB_CREATE_ASSET_EXPRESS_CODE_FIELD = (process.env.REF_TAB_CREATE_ASSET_EXPRESS_CODE_FIELD ?? "Express Code").trim();
 const REF_TAB_USAGE_LOANS_ENDPOINTS = (process.env.REF_TAB_USAGE_LOANS_ENDPOINTS ?? "loans?status=in,loans?status=returned,loans")
   .split(",")
   .map((endpoint) => endpoint.trim())
@@ -665,8 +667,12 @@ async function sendReftabJson(endpoint: string, method: "POST" | "PUT" | "DELETE
     { method, headers, body: bodyText || undefined, cache: "no-store" },
     REF_TAB_TIMEOUT_MS,
     label
-  );
-  const text = await res.text();
+  ).catch((error) => {
+    throw new ReftabWriteError(error instanceof Error ? error.message : String(error), "uncertain");
+  });
+  const text = await res.text().catch((error) => {
+    throw new ReftabWriteError(error instanceof Error ? error.message : String(error), "uncertain");
+  });
   if (!res.ok) {
     console.error("[reftab] Write request failed", {
       label,
@@ -676,14 +682,21 @@ async function sendReftabJson(endpoint: string, method: "POST" | "PUT" | "DELETE
       requestBody: safeLogBody(body),
       responseBody: truncateForLog(text),
     });
-    throw new Error(`${label} returned ${res.status}: ${text}`);
+    throw new ReftabWriteError(`${label} returned ${res.status}: ${text}`, res.status >= 500 || res.status === 408 ? "uncertain" : "rejected");
   }
   if (!text) return {};
+  let data: unknown;
   try {
-    return JSON.parse(text);
+    data = JSON.parse(text);
   } catch {
-    return { ok: true, text };
+    throw new ReftabWriteError(`${label} returned an unreadable response (${res.status}).`, "uncertain");
   }
+  // A successful HTTP status alone must not hide an API validation error.
+  if (data && typeof data === "object" && "error" in data && data.error) {
+    const detail = typeof data.error === "string" ? data.error : JSON.stringify(data.error);
+    throw new ReftabWriteError(`${label} returned an error (${res.status}): ${detail}`, "uncertain");
+  }
+  return data;
 }
 
 function idSetHas(idSet: Set<string>, match: string): boolean {
@@ -1774,17 +1787,22 @@ export async function reconcileReftabAssetOwner(input: ReftabOwnerReconciliation
     aids: [aid],
     notes: note,
   });
-  await checkoutReftabAsset(input.assetTag, aid, checkoutRef, note);
+  await checkoutReftabAsset(input.assetTag, aid, checkoutRef, note).catch((error) => {
+    throw new ReftabWriteError(`Asset was checked in, but checkout failed: ${error instanceof Error ? error.message : String(error)}`, "partial");
+  });
 
   return { loanId: currentLoan.loanId, loaneeId: checkoutRef.value };
 }
 
-export type ReftabCreateAndAssignInput = {
+export type ReftabCreateInput = {
   assetTag: string;
   serial?: string | null;
   title?: string | null;
   model?: string | null;
   categoryId?: string | null;
+};
+
+export type ReftabCreateAndAssignInput = ReftabCreateInput & {
   newOwnerEmployeeId: string;
   newOwnerEmail: string;
   newOwnerName?: string;
@@ -1843,17 +1861,25 @@ function numericRequiredId(value: string | undefined, label: string): number {
   return Number(value);
 }
 
-function addServiceTagField(body: Record<string, unknown>, input: ReftabCreateAndAssignInput): void {
-  const serviceTag = input.serial ?? input.assetTag;
-  if (!serviceTag || !REF_TAB_CREATE_ASSET_SERVICE_TAG_FIELD) return;
-  body[REF_TAB_CREATE_ASSET_SERVICE_TAG_FIELD] = serviceTag;
-  body.fields = {
-    ...(body.fields != null && typeof body.fields === "object" && !Array.isArray(body.fields) ? body.fields as Record<string, unknown> : {}),
-    [REF_TAB_CREATE_ASSET_SERVICE_TAG_FIELD]: serviceTag,
+function addCreateAssetDetails(body: Record<string, unknown>, input: ReftabCreateInput): void {
+  const serviceTag = input.serial?.trim() || input.assetTag.trim();
+  if (!serviceTag) return;
+  // Reftab accepts category custom fields by name inside the asset's details object.
+  const details: Record<string, unknown> = {
+    ...(body.details != null && typeof body.details === "object" && !Array.isArray(body.details) ? body.details as Record<string, unknown> : {}),
   };
+  if (REF_TAB_CREATE_ASSET_SERVICE_TAG_FIELD) {
+    details[REF_TAB_CREATE_ASSET_SERVICE_TAG_FIELD] = serviceTag;
+  }
+  // Dell Express Service Codes are the base-10 equivalent of a base-36 Service Tag.
+  // Validate the whole tag so parseInt cannot silently convert part of another serial format.
+  if (REF_TAB_CREATE_ASSET_EXPRESS_CODE_FIELD && /^(?:[a-z0-9]{5}|[a-z0-9]{7})$/i.test(serviceTag)) {
+    details[REF_TAB_CREATE_ASSET_EXPRESS_CODE_FIELD] = Number.parseInt(serviceTag, 36).toString(10);
+  }
+  if (Object.keys(details).length > 0) body.details = details;
 }
 
-function explicitCreateAssetCategoryId(input: ReftabCreateAndAssignInput): string | undefined {
+function explicitCreateAssetCategoryId(input: ReftabCreateInput): string | undefined {
   const tokens = tokenSet([input.title, input.model, input.assetTag, input.serial].filter(Boolean).join(" "));
   if ((tokens.has("tb") || tokens.has("tablet")) && REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID) {
     return REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID;
@@ -1880,13 +1906,7 @@ export async function fetchReftabCategories(): Promise<Array<{ categoryId: strin
   const categories: Array<{ categoryId: string; name: string }> = [];
 
   while (offset < 50_000) {
-    let list: Record<string, unknown>[];
-    try {
-      list = listFromResponse(await fetchReftabJson(`categories?limit=${limit}&offset=${offset}`, `Reftab categories offset ${offset}`));
-    } catch (e) {
-      console.warn(`[reftab] Category fetch failed: ${e instanceof Error ? e.message : String(e)}`);
-      break;
-    }
+    const list = listFromResponse(await fetchReftabJson(`categories?limit=${limit}&offset=${offset}`, `Reftab categories offset ${offset}`));
     if (list.length === 0) break;
     for (const item of list) {
       const category = categoryFromRecord(item);
@@ -1899,7 +1919,7 @@ export async function fetchReftabCategories(): Promise<Array<{ categoryId: strin
   return categories;
 }
 
-async function inferCreateAssetCategoryIdFromReftab(input: ReftabCreateAndAssignInput): Promise<string | undefined> {
+async function inferCreateAssetCategoryIdFromReftab(input: ReftabCreateInput): Promise<string | undefined> {
   const inputTokens = tokenSet([input.title, input.model, input.assetTag, input.serial].filter(Boolean).join(" "));
   const ranked = (await fetchReftabCategories())
     .map((category) => ({
@@ -1910,7 +1930,7 @@ async function inferCreateAssetCategoryIdFromReftab(input: ReftabCreateAndAssign
   return ranked.find((category) => category.score > 0)?.categoryId;
 }
 
-async function inferCreateAssetCategoryId(input: ReftabCreateAndAssignInput): Promise<string | undefined> {
+async function inferCreateAssetCategoryId(input: ReftabCreateInput): Promise<string | undefined> {
   if (input.categoryId) return input.categoryId;
 
   const explicitCategoryId = explicitCreateAssetCategoryId(input);
@@ -1950,7 +1970,7 @@ async function inferCreateAssetCategoryId(input: ReftabCreateAndAssignInput): Pr
   return liveCategoryId ?? (REF_TAB_CREATE_ASSET_CATEGORY_ID || undefined);
 }
 
-async function inferCreateAssetLocationId(input: ReftabCreateAndAssignInput): Promise<string | undefined> {
+async function inferCreateAssetLocationId(input: ReftabCreateInput): Promise<string | undefined> {
   const rows = await prisma.equipmentAssignment.findMany({
     select: {
       locationName: true,
@@ -1981,17 +2001,74 @@ async function inferCreateAssetLocationId(input: ReftabCreateAndAssignInput): Pr
   return REF_TAB_CREATE_ASSET_LOCATION_ID || ranked[0]?.locationId;
 }
 
+export type ReftabDecommissionReceipt = { aid: string; statusName: string; notes: string; url: string };
+
+async function getReftabAsset(aid: string): Promise<Record<string, unknown> | null> {
+  const url = `${REF_TAB_URL}/assets/${encodeURIComponent(aid)}`;
+  const response = await fetchWithTimeout(url, {
+    method: "GET", headers: signReftabRequest(url, "GET"), cache: "no-store",
+  }, REF_TAB_TIMEOUT_MS, `Reftab asset ${aid}`);
+  // Only a genuine 404 establishes absence. Permission/validation errors must stop creation.
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Reftab asset lookup returned ${response.status}: ${await response.text()}`);
+  const body = await response.json();
+  const asset = body?.asset ?? body;
+  if (!asset || typeof asset !== "object" || Array.isArray(asset)) throw new Error("Invalid Reftab asset response.");
+  return asset;
+}
+
+export async function verifyDecommissionedReftabAsset(aid: string, expectedNotes: string): Promise<ReftabDecommissionReceipt> {
+  const asset = await getReftabAsset(aid);
+  if (!asset || firstString(asset, ["aid", "id"]) !== aid) throw new Error("The decommissioned asset could not be verified in Reftab.");
+  const statusName = firstString(asset, ["status.name", "statusName"]);
+  if (statusName?.trim().toLowerCase() !== "decommissioned" || asset.notes !== expectedNotes) {
+    throw new Error("Reftab must show the Decommissioned status and the complete app-generated Asset Notes before confirmation.");
+  }
+  return { aid, statusName: "Decommissioned", notes: expectedNotes, url: `https://www.reftab.com/assets/${encodeURIComponent(aid)}` };
+}
+
+export async function createDecommissionedReftabAsset(
+  input: ReftabCreateInput & { note: string },
+): Promise<ReftabDecommissionReceipt> {
+  if (!input.categoryId) throw new Error("Select a Reftab category before decommissioning.");
+  const metadata = await fetchReftabJson("status", "Reftab status labels");
+  const record = metadata && typeof metadata === "object" ? metadata as Record<string, unknown> : {};
+  const statuses = listFromResponse(Array.isArray(metadata) ? metadata : record.statuses ?? record.status ?? metadata);
+  const matches = statuses.filter((status) => firstString(status, ["name", "statusName"])?.trim().toLowerCase() === "decommissioned");
+  if (matches.length !== 1) throw new Error('Reftab must have exactly one accessible status label named "Decommissioned".');
+  const statid = numericRequiredId(firstString(matches[0], ["statid", "id"]), "Decommissioned status ID");
+  if (await getReftabAsset(input.assetTag)) {
+    throw new Error("This asset already exists in Reftab. Inspect it before taking further action.");
+  }
+  const body: Record<string, unknown> = {
+    aid: input.assetTag, title: input.title ?? input.model ?? input.assetTag,
+    cid: numericRequiredId(input.categoryId, "Category ID"), statid, notes: input.note,
+  };
+  addCreateAssetDetails(body, input);
+  const location = await inferCreateAssetLocationId(input);
+  if (location) body.clid = numericId(location);
+  await sendReftabJson(REF_TAB_CREATE_ASSET_ENDPOINT, "POST", `Reftab decommission asset ${input.assetTag}`, body);
+  try {
+    return await verifyDecommissionedReftabAsset(input.assetTag, input.note);
+  } catch (error) {
+    throw new ReftabWriteError(`Asset creation succeeded, but verification failed: ${error instanceof Error ? error.message : String(error)}`, "partial");
+  }
+}
+
 export async function createAndAssignReftabAsset(input: ReftabCreateAndAssignInput): Promise<{ aid: string; loaneeId: string }> {
+  if (await getReftabAsset(input.assetTag)) {
+    throw new Error("This asset already exists in Reftab. Sync and inspect its loan before retrying.");
+  }
   const checkoutRef = await checkoutRefForUser({ employeeId: input.newOwnerEmployeeId, email: input.newOwnerEmail, displayName: input.newOwnerName });
 
   const note = input.note ?? `Created from NinjaOne reconciliation for ${input.assetTag}.`;
   const createBody: Record<string, unknown> = {
-    id: input.assetTag,
+    aid: input.assetTag,
     title: input.title ?? input.model ?? input.serial ?? input.assetTag,
     serial: input.serial ?? undefined,
     notes: note,
   };
-  addServiceTagField(createBody, input);
+  addCreateAssetDetails(createBody, input);
   if (input.model) createBody.model = input.model;
   const categoryId = await inferCreateAssetCategoryId(input);
   const numericCategoryId = numericId(categoryId);
@@ -2006,8 +2083,16 @@ export async function createAndAssignReftabAsset(input: ReftabCreateAndAssignInp
   if (numericLocationId !== undefined) createBody.clid = numericLocationId;
 
   const created = await sendReftabJson(REF_TAB_CREATE_ASSET_ENDPOINT, "POST", `Reftab create asset ${input.assetTag}`, createBody);
-  const aid = createdAssetIdFromResponse(created) ?? input.assetTag;
-  await checkoutReftabAsset(input.assetTag, aid, checkoutRef, note);
+  const aid = createdAssetIdFromResponse(created);
+  if (!aid) {
+    throw new ReftabWriteError(`Reftab did not confirm an asset ID for ${input.assetTag}; checkout was not attempted.`, "uncertain");
+  }
+  if (aid !== input.assetTag) {
+    throw new ReftabWriteError(`Reftab returned asset ID ${aid} instead of ${input.assetTag}; checkout was not attempted.`, "partial");
+  }
+  await checkoutReftabAsset(input.assetTag, aid, checkoutRef, note).catch((error) => {
+    throw new ReftabWriteError(`Asset ${aid} was created, but checkout failed: ${error instanceof Error ? error.message : String(error)}`, "partial");
+  });
 
   return { aid, loaneeId: checkoutRef.value };
 }

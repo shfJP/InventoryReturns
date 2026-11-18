@@ -1,0 +1,104 @@
+import ExcelJS from "exceljs";
+import type { ReconciliationReportItem } from "./owner-reconciliation";
+
+export type ReportCompletion = {
+  assetTag: string;
+  ninjaDeviceId: string;
+  action: string;
+  status: string;
+  completedAt: Date | null;
+  actorName: string;
+};
+
+const completionActions = new Set(["reassign-owner", "add-missing-asset", "decommission-missing-asset"]);
+
+export function summarizeReconciliation(items: ReconciliationReportItem[], audits: ReportCompletion[], now: Date) {
+  const weekStart = new Date(now.getTime() - 7 * 86_400_000);
+  const completions = audits.filter((audit) =>
+    audit.status === "SUCCEEDED" && completionActions.has(audit.action) &&
+    audit.completedAt && audit.completedAt <= now,
+  );
+  const distinctItems = (records: ReportCompletion[]) =>
+    new Set(records.map((record) => record.ninjaDeviceId || `asset:${record.assetTag}`)).size;
+  return {
+    weekStart,
+    outstanding: items.filter((item) => item.status !== "Aligned").length,
+    aligned: items.filter((item) => item.status === "Aligned").length,
+    missingNinja: items.filter((item) => item.status === "Missing from Ninja").length,
+    missingReftab: items.filter((item) => item.status === "Missing from Reftab").length,
+    reconciledTotal: distinctItems(completions),
+    reconciledWeek: distinctItems(completions.filter((audit) => audit.completedAt! >= weekStart)),
+    completions,
+  };
+}
+
+export async function buildReconciliationWorkbook(input: {
+  items: ReconciliationReportItem[];
+  audits: ReportCompletion[];
+  generatedAt: Date;
+  reftabSyncedAt: Date | null;
+  ninjaSyncedAt: Date | null;
+}) {
+  const totals = summarizeReconciliation(input.items, input.audits, input.generatedAt);
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Inventory Returns";
+  workbook.created = input.generatedAt;
+  const summary = workbook.addWorksheet("Summary");
+  summary.columns = [{ width: 44 }, { width: 32 }, { width: 100 }];
+  summary.addRows([
+    ["Reconciliation report", "Value", "Definition"],
+    ["Generated at (UTC)", input.generatedAt.toISOString()],
+    ["Past week begins (UTC)", totals.weekStart.toISOString(), "Rolling seven days, through the export timestamp."],
+    ["Latest Reftab record sync (UTC)", input.reftabSyncedAt?.toISOString() ?? "No synced records"],
+    ["Latest Ninja record sync (UTC)", input.ninjaSyncedAt?.toISOString() ?? "No synced records"],
+    ["Items needing reconciliation now", totals.outstanding, "All outstanding statuses below, including deferred and rejected reviews still unresolved."],
+    ["Items reconciled — all time", totals.reconciledTotal, "Distinct devices with successful owner changes, Reftab imports, or Reftab decommission imports in recorded audit history."],
+    ["Items reconciled — past seven days", totals.reconciledWeek, "Distinct devices with a successful completion during the stated seven-day window."],
+    ["Items missing from Ninja", totals.missingNinja, "Distinct Reftab asset tags with no eligible Ninja match."],
+    ["Items missing from Reftab", totals.missingReftab, "Eligible Ninja devices with no Reftab match."],
+    ["Items currently aligned", totals.aligned, "Matched devices whose active owner agrees between systems."],
+    ["Current inventory scope", input.items.length, "One item per eligible Ninja device or unmatched Reftab asset tag."],
+    ["Scope", "", "Uses the reconciliation matching rules. Windows Server, Linux and reserved decommissions are excluded from eligible Ninja devices. Unmatched Reftab items may include non-computer equipment."],
+    ["Freshness", "", "Recalculated on export from the latest synced portal data; exporting does not run an external system sync."],
+    ["History", "", "NO, UNSURE, DEFER, failed and pending attempts are not completed reconciliations. Historical completions can recur in today's outstanding list; these are separate measures, not an additive total."],
+    ["Coverage", "", "Historical totals cover recorded successful audit completions. Changes made outside the portal or before audit tracking may not be included."],
+  ]);
+  for (const status of ["Owner mismatch", "No owner signal", "Owner not in directory", "Inactive owner"] as const) {
+    summary.addRow([status, input.items.filter((item) => item.status === status).length, "Outstanding items by current status."]);
+  }
+
+  const detail = workbook.addWorksheet("Current inventory");
+  detail.columns = [
+    { header: "Status", key: "status", width: 28 },
+    { header: "Asset tag", key: "assetTag", width: 24 },
+    { header: "Serial", key: "serial", width: 26 },
+    { header: "Title", key: "title", width: 46 },
+    { header: "Ninja device ID", key: "ninjaDeviceId", width: 24 },
+  ];
+  detail.addRows([...input.items].sort((a, b) => a.status.localeCompare(b.status) || a.assetTag.localeCompare(b.assetTag)));
+  const history = workbook.addWorksheet("Completed changes");
+  history.columns = [
+    { header: "Asset tag", key: "assetTag", width: 24 },
+    { header: "Ninja device ID", key: "ninjaDeviceId", width: 24 },
+    { header: "Action", key: "action", width: 34 },
+    { header: "Completed at (UTC)", key: "completed", width: 30 },
+    { header: "Past seven days", key: "pastWeek", width: 20 },
+    { header: "Completed by", key: "actorName", width: 30 },
+  ];
+  history.addRows(totals.completions.map((audit) => ({
+    ...audit, completed: audit.completedAt!.toISOString(),
+    pastWeek: audit.completedAt! >= totals.weekStart ? "Yes" : "No",
+  })));
+  for (const sheet of workbook.worksheets) {
+    sheet.views = [{ state: "frozen", ySplit: 1 }];
+    sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    sheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF17436B" } };
+    sheet.getRow(1).height = 26;
+    if (sheet !== summary) sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: Math.max(1, sheet.rowCount), column: sheet.columnCount } };
+  }
+  summary.eachRow((row) => {
+    row.alignment = { vertical: "top", wrapText: true };
+    if (row.number >= 6) row.height = 44;
+  });
+  return workbook.xlsx.writeBuffer();
+}

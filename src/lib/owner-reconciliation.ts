@@ -1,6 +1,7 @@
 import type { EquipmentAssignment, NinjaOneDevice, User } from "@prisma/client";
 import { prisma } from "./db";
-import { isDeviceLocalWindowsAccount } from "./ninja-user";
+import { buildNinjaUserAliases, resolveNinjaDirectoryUser } from "./ninja-user";
+import { buildOwnerLoginEvidence, loginFromSnapshot, LOGIN_WINDOW_DAYS, type OwnerLoginEvidence } from "./ninja-login-evidence";
 
 type EquipmentWithUser = EquipmentAssignment & {
   user: Pick<User, "employeeId" | "displayName" | "email" | "upn" | "isActive"> | null;
@@ -64,6 +65,7 @@ export type OwnerReconciliationRow = {
   ninjaDevice: NinjaDeviceView;
   matchReason: string;
   confidence: number;
+  ownerEvidence: OwnerLoginEvidence;
 };
 
 export type MissingReftabAssetRow = {
@@ -94,65 +96,20 @@ export type OwnerReconciliationSummary = {
 export type OwnerReconciliationResult = {
   rows: OwnerReconciliationRow[];
   missingReftabRows: MissingReftabAssetRow[];
+  reportItems: ReconciliationReportItem[];
   summary: OwnerReconciliationSummary;
+};
+
+export type ReconciliationReportItem = {
+  assetTag: string;
+  serial: string | null;
+  title: string | null;
+  ninjaDeviceId: string | null;
+  status: "Aligned" | "Owner mismatch" | "No owner signal" | "Owner not in directory" | "Inactive owner" | "Missing from Ninja" | "Missing from Reftab";
 };
 
 function normalizeText(value: string | null | undefined): string {
   return value?.toLowerCase().replace(/[^a-z0-9]+/g, "") ?? "";
-}
-
-function normalizeAlias(value: string | null | undefined): string | null {
-  const text = value?.trim().toLowerCase();
-  if (!text) return null;
-  const withoutDomain = text.includes("\\") ? text.split("\\").pop() ?? text : text;
-  return withoutDomain || null;
-}
-
-function aliasLocalPart(value: string | null | undefined): string | null {
-  const alias = normalizeAlias(value);
-  if (!alias || !alias.includes("@")) return null;
-  return alias.split("@")[0] || null;
-}
-
-function addAlias(map: Map<string, UserSummary>, value: string | null | undefined, user: UserSummary): void {
-  const alias = normalizeAlias(value);
-  if (!alias) return;
-  const existing = map.get(alias);
-  if (!existing || (!existing.isActive && user.isActive)) map.set(alias, user);
-
-  const localPart = aliasLocalPart(alias);
-  if (localPart) {
-    const localExisting = map.get(localPart);
-    if (!localExisting || (!localExisting.isActive && user.isActive)) map.set(localPart, user);
-  }
-
-  const compact = normalizeText(alias);
-  if (compact) {
-    const compactExisting = map.get(compact);
-    if (!compactExisting || (!compactExisting.isActive && user.isActive)) map.set(compact, user);
-  }
-}
-
-function buildUserAliasMap(users: UserSummary[]): Map<string, UserSummary> {
-  const aliases = new Map<string, UserSummary>();
-  for (const user of users) {
-    addAlias(aliases, user.employeeId, user);
-    addAlias(aliases, user.email, user);
-    addAlias(aliases, user.upn, user);
-    addAlias(aliases, user.displayName, user);
-  }
-  return aliases;
-}
-
-function resolveLikelyUser(
-  rawLikelyUser: string | null,
-  aliases: Map<string, UserSummary>,
-  device: NinjaOneDevice,
-): UserSummary | null {
-  if (isDeviceLocalWindowsAccount(rawLikelyUser, device)) return null;
-  const direct = normalizeAlias(rawLikelyUser);
-  if (!direct) return null;
-  return aliases.get(direct) ?? aliases.get(aliasLocalPart(direct) ?? "") ?? aliases.get(normalizeText(direct)) ?? null;
 }
 
 function deviceSearchText(device: NinjaOneDevice): string {
@@ -423,6 +380,8 @@ function likelyOwnerFromDevice(device: NinjaOneDevice): string | null {
     "references.assignedUser",
     "references.primaryUser",
     "references.lastLoggedInUser",
+    "lastLoggedOnUser.userName",
+    "lastLoggedOnUser.username",
   ]);
   if (direct) return direct;
 
@@ -518,7 +477,7 @@ function summarizeUser(user: Pick<User, "employeeId" | "displayName" | "email" |
   };
 }
 
-function toRow(item: EquipmentWithUser, match: NinjaMatch, ninjaOwner: UserSummary, ninjaOwnerRaw: string): OwnerReconciliationRow {
+function toRow(item: EquipmentWithUser, match: NinjaMatch, ninjaOwner: UserSummary, ninjaOwnerRaw: string, ownerEvidence: OwnerLoginEvidence): OwnerReconciliationRow {
   return {
     id: `${item.assetTag}:${match.device.id}`,
     assetTag: item.assetTag,
@@ -534,6 +493,7 @@ function toRow(item: EquipmentWithUser, match: NinjaMatch, ninjaOwner: UserSumma
     ninjaDevice: deviceView(match.device),
     matchReason: match.matchReason,
     confidence: Math.min(match.score, 100),
+    ownerEvidence,
   };
 }
 
@@ -563,7 +523,8 @@ export async function getOwnerReconciliationRows(): Promise<OwnerReconciliationR
 }
 
 export async function getOwnerReconciliationResult(): Promise<OwnerReconciliationResult> {
-  const [equipment, devices, users] = await Promise.all([
+  const now = new Date();
+  const [equipment, devices, users, decommissions, unresolvedAssets] = await Promise.all([
     prisma.equipmentAssignment.findMany({
       orderBy: [{ assetTag: "asc" }, { assignedToEmployeeId: "asc" }],
       include: {
@@ -578,7 +539,12 @@ export async function getOwnerReconciliationResult(): Promise<OwnerReconciliatio
         },
       },
     }),
-    prisma.ninjaOneDevice.findMany(),
+    prisma.ninjaOneDevice.findMany({
+      include: { loginObservations: {
+        where: { loggedOnAt: { gte: new Date(now.getTime() - LOGIN_WINDOW_DAYS * 86_400_000) } },
+        select: { username: true, loggedOnAt: true },
+      } },
+    }),
     prisma.user.findMany({
       select: {
         employeeId: true,
@@ -588,11 +554,26 @@ export async function getOwnerReconciliationResult(): Promise<OwnerReconciliatio
         isActive: true,
       },
     }),
+    prisma.hardwareDecommission.findMany({
+      where: { status: { not: "FAILED" } }, select: { ninjaDeviceId: true },
+    }),
+    prisma.unresolvedCollection.findMany({
+      where: { source: "reftab_unmatched_assignee", status: { not: "RESOLVED" } },
+      select: { assetTag: true, serial: true },
+    }),
   ]);
-  const eligibleDevices = devices.filter((device) => !isExcludedNinjaDevice(device));
-  const aliases = buildUserAliasMap(users.map(summarizeUser));
+  const decommissionedIds = new Set(decommissions.map((record) => record.ninjaDeviceId));
+  const eligibleDevices = devices.filter((device) => !isExcludedNinjaDevice(device) && !decommissionedIds.has(device.id));
+  const aliases = buildNinjaUserAliases(users.map(summarizeUser));
+  const devicesById = new Map(devices.map((device) => [device.id, device]));
   const ninjaIndex = buildNinjaDeviceIndex(eligibleDevices);
   const equipmentIdentifiers = buildEquipmentIdentifierSet(equipment);
+  for (const asset of unresolvedAssets) {
+    for (const value of [asset.assetTag, asset.serial]) {
+      const normalized = normalizeText(value);
+      if (normalized.length >= 3) equipmentIdentifiers.add(normalized);
+    }
+  }
   const summary: OwnerReconciliationSummary = {
     equipmentCount: equipment.length,
     ninjaDeviceCount: eligibleDevices.length,
@@ -606,33 +587,62 @@ export async function getOwnerReconciliationResult(): Promise<OwnerReconciliatio
   };
   const rows: OwnerReconciliationRow[] = [];
   const matchedDeviceIds = new Set<string>();
+  const reportItems = new Map<string, ReconciliationReportItem>();
 
   for (const item of equipment) {
     const match = findBestNinjaMatch(item, ninjaIndex);
-    if (!match) continue;
+    if (!match) {
+      reportItems.set(`reftab:${item.assetTag}`, {
+        assetTag: item.assetTag, serial: item.serial, title: item.title,
+        ninjaDeviceId: null, status: "Missing from Ninja",
+      });
+      continue;
+    }
     matchedDeviceIds.add(match.device.id);
     summary.matchedDeviceCount += 1;
 
     const ninjaOwnerRaw = ninjaIndex.devices.find((indexed) => indexed.device.id === match.device.id)?.ownerRaw;
+    const reportItem: ReconciliationReportItem = {
+      assetTag: item.assetTag, serial: item.serial, title: item.title,
+      ninjaDeviceId: match.device.id, status: "No owner signal",
+    };
+    // One physical Ninja device counts once, even with multiple assignment rows.
+    const previousReportItem = reportItems.get(`ninja:${match.device.id}`);
+    reportItems.set(`ninja:${match.device.id}`, reportItem);
     if (!ninjaOwnerRaw) {
       summary.missingNinjaOwnerCount += 1;
       continue;
     }
 
-    const ninjaOwner = resolveLikelyUser(ninjaOwnerRaw, aliases, match.device);
+    const ninjaOwner = resolveNinjaDirectoryUser(ninjaOwnerRaw, aliases, match.device);
     if (!ninjaOwner) {
+      reportItem.status = "Owner not in directory";
       summary.unresolvedNinjaOwnerCount += 1;
       continue;
     }
     if (!ninjaOwner.isActive) {
+      reportItem.status = "Inactive owner";
       summary.inactiveNinjaOwnerCount += 1;
       continue;
     }
     if (ninjaOwner.employeeId === item.assignedToEmployeeId) {
+      reportItem.status = previousReportItem && previousReportItem.status !== "Aligned" ? previousReportItem.status : "Aligned";
       summary.alreadyMatchedOwnerCount += 1;
       continue;
     }
-    rows.push(toRow(item, match, ninjaOwner, ninjaOwnerRaw));
+    reportItem.status = "Owner mismatch";
+    const device = devicesById.get(match.device.id)!;
+    const snapshot = loginFromSnapshot(parseDetailsJson(device).lastLoggedOnUser, now);
+    const evidence = buildOwnerLoginEvidence({
+      observations: [...device.loginObservations, ...(snapshot ? [snapshot] : [])],
+      proposedOwnerEmployeeId: ninjaOwner.employeeId,
+      currentOwnerEmployeeId: item.assignedToEmployeeId,
+      resolveUser: (username) => resolveNinjaDirectoryUser(username, aliases, device),
+      collectionStartedAt: device.loginHistoryStartedAt ?? (snapshot ? device.lastSyncedAt : null),
+      lastCheckedAt: device.loginHistoryCheckedAt ?? (snapshot ? device.lastSyncedAt : null),
+      now,
+    });
+    rows.push(toRow(item, match, ninjaOwner, ninjaOwnerRaw, evidence));
   }
 
   const missingReftabRows: MissingReftabAssetRow[] = [];
@@ -641,7 +651,7 @@ export async function getOwnerReconciliationResult(): Promise<OwnerReconciliatio
     if (hasReftabMatchForDevice(identity, equipmentIdentifiers, equipment)) continue;
 
     const ninjaOwnerRaw = ownerRaw;
-    const ninjaOwner = ninjaOwnerRaw ? resolveLikelyUser(ninjaOwnerRaw, aliases, device) : null;
+    const ninjaOwner = ninjaOwnerRaw ? resolveNinjaDirectoryUser(ninjaOwnerRaw, aliases, device) : null;
     if (!ninjaOwnerRaw) {
       summary.missingNinjaOwnerCount += 1;
     } else if (!ninjaOwner) {
@@ -650,11 +660,15 @@ export async function getOwnerReconciliationResult(): Promise<OwnerReconciliatio
       summary.inactiveNinjaOwnerCount += 1;
     }
     missingReftabRows.push(toMissingRow(device, identity, ninjaOwner, ninjaOwnerRaw));
+    reportItems.set(`ninja:${device.id}`, {
+      assetTag: identity.assetTag, serial: identity.serial, title: identity.title,
+      ninjaDeviceId: device.id, status: "Missing from Reftab",
+    });
   }
 
   summary.mismatchCount = rows.length;
   summary.missingReftabCount = missingReftabRows.length;
-  return { rows, missingReftabRows, summary };
+  return { rows, missingReftabRows, summary, reportItems: [...reportItems.values()] };
 }
 
 export async function getOwnerReconciliationRow(assetTag: string, ninjaDeviceId: string): Promise<OwnerReconciliationRow | null> {

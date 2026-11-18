@@ -87,27 +87,100 @@ model EquipmentAssignment {
 }
 
 model NinjaOneDevice {
-  id             String    @id
-  displayName    String?
-  systemName     String?
-  dnsName        String?
-  netbiosName    String?
-  organizationId String?
-  locationId     String?
-  nodeClass      String?
-  approvalStatus String?
-  offline        Boolean?
-  lastContact    String?
-  lastUpdate     String?
-  likelyUser     String?
-  detailsJson    String?
-  lastSyncedAt   DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id                    String    @id
+  displayName           String?
+  systemName            String?
+  dnsName               String?
+  netbiosName           String?
+  organizationId        String?
+  locationId            String?
+  nodeClass             String?
+  approvalStatus        String?
+  offline               Boolean?
+  lastContact           String?
+  lastUpdate            String?
+  likelyUser            String?
+  detailsJson           String?
+  lastSyncedAt          DateTime?
+  loginHistoryStartedAt DateTime?
+  loginHistoryCheckedAt DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  loginObservations NinjaOneLoginObservation[]
 
   @@index([displayName])
   @@index([systemName])
   @@index([netbiosName])
+}
+
+model NinjaOneLoginObservation {
+  id          String         @id @default(cuid())
+  deviceId    String
+  username    String
+  loggedOnAt  DateTime
+  firstSeenAt DateTime       @default(now())
+  device      NinjaOneDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@unique([deviceId, username, loggedOnAt])
+  @@index([deviceId, loggedOnAt])
+}
+
+model ReconciliationAudit {
+  id                      String    @id @default(cuid())
+  action                  String
+  status                  String
+  assetTag                String
+  ninjaDeviceId           String
+  previousOwnerEmployeeId String?
+  previousOwnerName       String?
+  proposedOwnerEmployeeId String?
+  proposedOwnerName       String?
+  actorEmployeeId         String
+  actorName               String
+  actorEmail              String?
+  decision                String?
+  decisionId              String?   @unique
+  reason                  String?
+  notes                   String?
+  evidenceJson            String?
+  resultJson              String?
+  error                   String?
+  correctionRequestId     String?
+  createdAt               DateTime  @default(now())
+  completedAt             DateTime?
+
+  @@index([createdAt, id])
+  @@index([assetTag, createdAt])
+}
+
+// Kept independently of synced assignments/devices, including after NinjaOne removal.
+model HardwareDecommission {
+  id                    String    @id @default(cuid())
+  ninjaDeviceId         String    @unique
+  ninjaUid              String?
+  assetTag              String    @unique
+  serial                String?
+  title                 String?
+  model                 String?
+  deviceName            String
+  lastContact           DateTime
+  categoryId            String
+  status                String    @default("CREATING")
+  reftabAid             String?
+  assetNotes            String
+  actorEmployeeId       String
+  actorName             String
+  actorEmail            String?
+  visuallyConfirmedAt   DateTime?
+  confirmedByEmployeeId String?
+  confirmedByName       String?
+  ninjaDecommissionedAt DateTime?
+  error                 String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([status, createdAt])
 }
 
 model CollectionEvent {

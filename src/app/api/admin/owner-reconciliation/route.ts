@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { getMissingReftabAssetRow, getOwnerReconciliationRow } from "@/lib/owner-reconciliation";
-import { createAndAssignReftabAsset, fetchReftabCategories, reconcileReftabAssetOwner } from "@/lib/ref-tab";
+import { getOwnerReconciliationRow } from "@/lib/owner-reconciliation";
+import { fetchReftabCategories, reconcileReftabAssetOwner } from "@/lib/ref-tab";
 import { getCachedOwnerReconciliationResult, invalidateOwnerReconciliationCache } from "@/lib/owner-reconciliation-cache";
 import { getAccessProfile } from "@/lib/access-control";
+import { runAuditedReftabChange } from "@/lib/reconciliation-audit";
+import { addMissingReftabAsset } from "@/lib/missing-reftab-asset";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +32,26 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    if (req.nextUrl.searchParams.get("audit") === "1") {
+      const page = Number(req.nextUrl.searchParams.get("page") ?? "1");
+      if (!Number.isSafeInteger(page) || page < 1 || page > 10_000) {
+        return NextResponse.json({ error: "Invalid audit page" }, { status: 400 });
+      }
+      const query = (req.nextUrl.searchParams.get("q") ?? "").trim().slice(0, 200);
+      const where = query ? {
+        OR: [
+          "assetTag", "ninjaDeviceId", "actorName", "actorEmployeeId",
+          "previousOwnerName", "previousOwnerEmployeeId", "proposedOwnerName", "proposedOwnerEmployeeId",
+        ].map((field) => ({ [field]: { contains: query, mode: "insensitive" as const } }))
+      } : {};
+      const [total, rows] = await prisma.$transaction([
+        prisma.reconciliationAudit.count({ where }),
+        prisma.reconciliationAudit.findMany({
+          where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: (page - 1) * 25, take: 25,
+        }),
+      ]);
+      return NextResponse.json({ rows, total, page, pageSize: 25 });
+    }
     if (req.nextUrl.searchParams.get("categories") === "1") {
       const categories = await fetchReftabCategories();
       return NextResponse.json({ categories });
@@ -76,213 +98,182 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Forbidden: reconciliation access is required" }, { status: 403 });
   }
 
+  const actor = {
+    actorEmployeeId: access.user.employeeId,
+    actorName: access.user.displayName,
+    actorEmail: access.user.email,
+  };
   try {
-  const raw = await req.json().catch(() => ({}));
-  const parsed = approveSchema.safeParse(raw);
-  if (!parsed.success) {
-    return NextResponse.json({ error: "Invalid body", details: parsed.error.flatten() }, { status: 400 });
-  }
-
-  if (parsed.data.action === "record-decision") {
-    if (!parsed.data.decision) {
-      return NextResponse.json({ error: "Decision is required" }, { status: 400 });
+    const raw = await req.json().catch(() => ({}));
+    const parsed = approveSchema.safeParse(raw);
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Invalid body", details: parsed.error.flatten() }, { status: 400 });
     }
+
+    if (parsed.data.action === "record-decision") {
+      if (!parsed.data.decision) {
+        return NextResponse.json({ error: "Decision is required" }, { status: 400 });
+      }
+      const row = await getOwnerReconciliationRow(parsed.data.assetTag, parsed.data.ninjaDeviceId);
+      if (!row) {
+        return NextResponse.json({ error: "No current reconciliation row found" }, { status: 404 });
+      }
+      if (parsed.data.decision === "YES") {
+        return NextResponse.json({ error: "Use reassign-owner to approve and write the ownership change to Reftab." }, { status: 400 });
+      }
+      const decisionValue = parsed.data.decision;
+      const saved = await prisma.$transaction(async (tx) => {
+        let correctionRequestId: string | null = null;
+        if (parsed.data.decision === "NO" || parsed.data.decision === "UNSURE") {
+          const correction = await tx.correctionRequest.create({
+            data: {
+              source: "owner_reconciliation",
+              assetTag: row.assetTag,
+              subjectEmployeeId: row.ninjaOwner.employeeId,
+              currentOwnerEmployeeId: row.reftabOwnerEmployeeId,
+              proposedOwnerEmployeeId: row.ninjaOwner.employeeId,
+              ninjaDeviceId: row.ninjaDevice.id,
+              reason: parsed.data.reason?.trim() || (parsed.data.decision === "NO" ? "Suggested owner rejected" : "Owner requires investigation"),
+              details: parsed.data.notes?.trim() || null,
+              requesterEmployeeId: access.user.employeeId,
+              requesterName: access.user.displayName,
+              requesterEmail: access.user.email,
+              status: "OPEN",
+              auditEvents: {
+                create: {
+                  action: "CREATED_FROM_RECONCILIATION",
+                  newStatus: "OPEN",
+                  note: parsed.data.reason?.trim() || null,
+                  actorEmployeeId: access.user.employeeId,
+                  actorName: access.user.displayName,
+                },
+              },
+            },
+          });
+          correctionRequestId = correction.id;
+        }
+        const decision = await tx.reconciliationDecision.create({
+          data: {
+            assetTag: row.assetTag,
+            ninjaDeviceId: row.ninjaDevice.id,
+            currentOwnerEmployeeId: row.reftabOwnerEmployeeId,
+            proposedOwnerEmployeeId: row.ninjaOwner.employeeId,
+            decision: decisionValue,
+            reason: parsed.data.reason?.trim() || null,
+            notes: parsed.data.notes?.trim() || null,
+            decidedByEmployeeId: access.user.employeeId,
+            decidedByName: access.user.displayName,
+            correctionRequestId,
+          },
+        });
+        await tx.reconciliationAudit.create({
+          data: {
+            ...actor,
+            action: "record-decision", status: "SUCCEEDED",
+            assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id,
+            previousOwnerEmployeeId: row.reftabOwnerEmployeeId,
+            previousOwnerName: row.reftabOwner?.displayName,
+            proposedOwnerEmployeeId: row.ninjaOwner.employeeId,
+            proposedOwnerName: row.ninjaOwner.displayName,
+            decision: decisionValue, reason: parsed.data.reason?.trim() || null,
+            decisionId: decision.id,
+            notes: parsed.data.notes?.trim() || null,
+            evidenceJson: JSON.stringify(row.ownerEvidence),
+            correctionRequestId, completedAt: new Date(),
+          }
+        });
+        return { decision, correctionRequestId };
+      });
+      return NextResponse.json({ ok: true, ...saved });
+    }
+
+    if (parsed.data.action === "add-missing-asset") {
+      try {
+        const added = await addMissingReftabAsset(parsed.data, actor);
+        return NextResponse.json({ ok: true, ...added, completed: {
+          action: "add-missing-asset", assetTag: parsed.data.assetTag, ninjaDeviceId: parsed.data.ninjaDeviceId,
+        } });
+      } catch (e) {
+        return NextResponse.json({ error: e instanceof Error ? e.message : "Missing asset creation failed" }, { status: 500 });
+      }
+    }
+
     const row = await getOwnerReconciliationRow(parsed.data.assetTag, parsed.data.ninjaDeviceId);
     if (!row) {
-      return NextResponse.json({ error: "No current reconciliation row found" }, { status: 404 });
-    }
-    let correctionRequestId: string | null = null;
-    if (parsed.data.decision === "NO" || parsed.data.decision === "UNSURE") {
-      const correction = await prisma.correctionRequest.create({
-        data: {
-          source: "owner_reconciliation",
-          assetTag: row.assetTag,
-          subjectEmployeeId: row.ninjaOwner.employeeId,
-          currentOwnerEmployeeId: row.reftabOwnerEmployeeId,
-          proposedOwnerEmployeeId: row.ninjaOwner.employeeId,
-          ninjaDeviceId: row.ninjaDevice.id,
-          reason: parsed.data.reason?.trim() || (parsed.data.decision === "NO" ? "Suggested owner rejected" : "Owner requires investigation"),
-          details: parsed.data.notes?.trim() || null,
-          requesterEmployeeId: access.user.employeeId,
-          requesterName: access.user.displayName,
-          requesterEmail: access.user.email,
-          status: "OPEN",
-          auditEvents: {
-            create: {
-              action: "CREATED_FROM_RECONCILIATION",
-              newStatus: "OPEN",
-              note: parsed.data.reason?.trim() || null,
-              actorEmployeeId: access.user.employeeId,
-              actorName: access.user.displayName,
-            },
-          },
-        },
-      });
-      correctionRequestId = correction.id;
-    }
-    const decision = await prisma.reconciliationDecision.create({
-      data: {
-        assetTag: row.assetTag,
-        ninjaDeviceId: row.ninjaDevice.id,
-        currentOwnerEmployeeId: row.reftabOwnerEmployeeId,
-        proposedOwnerEmployeeId: row.ninjaOwner.employeeId,
-        decision: parsed.data.decision,
-        reason: parsed.data.reason?.trim() || null,
-        notes: parsed.data.notes?.trim() || null,
-        decidedByEmployeeId: access.user.employeeId,
-        decidedByName: access.user.displayName,
-        correctionRequestId,
-      },
-    });
-    return NextResponse.json({ ok: true, decision, correctionRequestId });
-  }
-
-  if (parsed.data.action === "add-missing-asset") {
-    const owner = parsed.data.ownerEmployeeId
-      ? await prisma.user.findUnique({
-          where: { employeeId: parsed.data.ownerEmployeeId },
-          select: { employeeId: true, email: true, displayName: true, isActive: true },
-        })
-      : null;
-    const row = owner
-      ? {
-          assetTag: parsed.data.assetTag,
-          serial: parsed.data.serial ?? null,
-          model: parsed.data.model ?? null,
-          title: parsed.data.title ?? null,
-          ninjaOwner: owner,
-          ninjaDevice: { id: parsed.data.ninjaDeviceId },
-        }
-      : await getMissingReftabAssetRow(parsed.data.ninjaDeviceId);
-
-    if (!row || row.assetTag !== parsed.data.assetTag) {
-      return NextResponse.json({ error: "No current NinjaOne device missing from Reftab was found for this request." }, { status: 404 });
-    }
-    if (!row.ninjaOwner?.isActive) {
-      return NextResponse.json({ error: "This NinjaOne device does not resolve to an active directory owner yet." }, { status: 400 });
-    }
-    const existingAssignment = await prisma.equipmentAssignment.findFirst({
-      where: { assetTag: row.assetTag },
-      select: { id: true },
-    });
-    if (existingAssignment) {
-      return NextResponse.json({ error: "This asset now exists in Reftab sync data. Refresh the page before retrying." }, { status: 409 });
+      return NextResponse.json({ error: "No current owner mismatch found for this asset and NinjaOne device." }, { status: 404 });
     }
 
     try {
-      const result = await createAndAssignReftabAsset({
+      const { result, auditId } = await runAuditedReftabChange({
+        ...actor, action: "reassign-owner", decision: "YES",
+        assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id,
+        previousOwnerEmployeeId: row.reftabOwnerEmployeeId,
+        previousOwnerName: row.reftabOwner?.displayName,
+        proposedOwnerEmployeeId: row.ninjaOwner.employeeId,
+        proposedOwnerName: row.ninjaOwner.displayName,
+        evidenceJson: JSON.stringify(row.ownerEvidence),
+      }, () => reconcileReftabAssetOwner({
         assetTag: row.assetTag,
-        serial: row.serial,
-        model: row.model,
-        title: row.title,
-        categoryId: parsed.data.categoryId,
+        aid: row.aid,
         newOwnerEmployeeId: row.ninjaOwner.employeeId,
         newOwnerEmail: row.ninjaOwner.email,
         newOwnerName: row.ninjaOwner.displayName,
-        note: `Asset created from NinjaOne device ${row.ninjaDevice.id} and assigned to ${row.ninjaOwner.employeeId}.`,
-      });
-
-      await prisma.equipmentAssignment.upsert({
-        where: {
-          assetTag_assignedToEmployeeId: {
+        note: `Owner reconciliation approved from NinjaOne device ${row.ninjaDevice.id}. Previous Reftab owner: ${row.reftabOwnerEmployeeId}.`,
+      }), async (tx) => {
+        await tx.equipmentAssignment.deleteMany({
+          where: {
             assetTag: row.assetTag,
-            assignedToEmployeeId: row.ninjaOwner.employeeId,
+            assignedToEmployeeId: row.reftabOwnerEmployeeId,
           },
-        },
-        update: {
-          aid: result.aid,
-          serial: row.serial,
-          model: row.model,
-          title: row.title,
-          source: "ref_tab",
-          lastSyncedAt: new Date(),
-        },
-        create: {
-          assetTag: row.assetTag,
-          aid: result.aid,
-          serial: row.serial,
-          model: row.model,
-          title: row.title,
-          assignedToEmployeeId: row.ninjaOwner.employeeId,
-          source: "ref_tab",
-          lastSyncedAt: new Date(),
-        },
+        });
+        await tx.equipmentAssignment.upsert({
+          where: {
+            assetTag_assignedToEmployeeId: {
+              assetTag: row.assetTag,
+              assignedToEmployeeId: row.ninjaOwner.employeeId,
+            },
+          },
+          update: {
+            aid: row.aid,
+            serial: row.serial,
+            model: row.model,
+            title: row.title,
+            catName: row.category,
+            source: "ref_tab",
+            lastSyncedAt: new Date(),
+          },
+          create: {
+            assetTag: row.assetTag,
+            aid: row.aid,
+            serial: row.serial,
+            model: row.model,
+            title: row.title,
+            catName: row.category,
+            assignedToEmployeeId: row.ninjaOwner.employeeId,
+            source: "ref_tab",
+            lastSyncedAt: new Date(),
+          },
+        });
+        const decision = await tx.reconciliationDecision.create({
+          data: {
+            assetTag: row.assetTag,
+            ninjaDeviceId: row.ninjaDevice.id,
+            currentOwnerEmployeeId: row.reftabOwnerEmployeeId,
+            proposedOwnerEmployeeId: row.ninjaOwner.employeeId,
+            decision: "YES",
+            reason: "Approved and written to Reftab",
+            decidedByEmployeeId: access.user.employeeId,
+            decidedByName: access.user.displayName,
+          },
+        });
+        return { decisionId: decision.id };
       });
-      await invalidateOwnerReconciliationCache();
+      await invalidateOwnerReconciliationCache().catch((error) => console.error("[owner-reconciliation] Cache invalidation failed", error));
 
-      return NextResponse.json({ ok: true, result, completed: { action: "add-missing-asset", assetTag: row.assetTag, ninjaDeviceId: parsed.data.ninjaDeviceId } });
+      return NextResponse.json({ ok: true, result, auditId, completed: { action: "reassign-owner", assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id } });
     } catch (e) {
-      return NextResponse.json({ error: e instanceof Error ? e.message : "Missing asset creation failed" }, { status: 500 });
+      return NextResponse.json({ error: e instanceof Error ? e.message : "Owner reconciliation failed" }, { status: 500 });
     }
-  }
-
-  const row = await getOwnerReconciliationRow(parsed.data.assetTag, parsed.data.ninjaDeviceId);
-  if (!row) {
-    return NextResponse.json({ error: "No current owner mismatch found for this asset and NinjaOne device." }, { status: 404 });
-  }
-
-  try {
-    const result = await reconcileReftabAssetOwner({
-      assetTag: row.assetTag,
-      aid: row.aid,
-      newOwnerEmployeeId: row.ninjaOwner.employeeId,
-      newOwnerEmail: row.ninjaOwner.email,
-      newOwnerName: row.ninjaOwner.displayName,
-      note: `Owner reconciliation approved from NinjaOne device ${row.ninjaDevice.id}. Previous Reftab owner: ${row.reftabOwnerEmployeeId}.`,
-    });
-
-    await prisma.equipmentAssignment.deleteMany({
-      where: {
-        assetTag: row.assetTag,
-        assignedToEmployeeId: row.reftabOwnerEmployeeId,
-      },
-    });
-    await prisma.equipmentAssignment.upsert({
-      where: {
-        assetTag_assignedToEmployeeId: {
-          assetTag: row.assetTag,
-          assignedToEmployeeId: row.ninjaOwner.employeeId,
-        },
-      },
-      update: {
-        aid: row.aid,
-        serial: row.serial,
-        model: row.model,
-        title: row.title,
-        catName: row.category,
-        source: "ref_tab",
-        lastSyncedAt: new Date(),
-      },
-      create: {
-        assetTag: row.assetTag,
-        aid: row.aid,
-        serial: row.serial,
-        model: row.model,
-        title: row.title,
-        catName: row.category,
-        assignedToEmployeeId: row.ninjaOwner.employeeId,
-        source: "ref_tab",
-        lastSyncedAt: new Date(),
-      },
-    });
-    await prisma.reconciliationDecision.create({
-      data: {
-        assetTag: row.assetTag,
-        ninjaDeviceId: row.ninjaDevice.id,
-        currentOwnerEmployeeId: row.reftabOwnerEmployeeId,
-        proposedOwnerEmployeeId: row.ninjaOwner.employeeId,
-        decision: "YES",
-        reason: "Approved and written to Reftab",
-        decidedByEmployeeId: access.user.employeeId,
-        decidedByName: access.user.displayName,
-      },
-    });
-    await invalidateOwnerReconciliationCache();
-
-    return NextResponse.json({ ok: true, result, completed: { action: "reassign-owner", assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id } });
-  } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : "Owner reconciliation failed" }, { status: 500 });
-  }
   } catch (e) {
     console.error("[owner-reconciliation] POST failed", e);
     return NextResponse.json({ error: e instanceof Error ? e.message : "Owner reconciliation failed" }, { status: 500 });

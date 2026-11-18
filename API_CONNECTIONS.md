@@ -42,7 +42,19 @@ If **both** `REF_TAB_API_PUBLIC_KEY` and `REF_TAB_API_SECRET_KEY` are set, this 
 | `REF_TAB_ASSET_TAG_FIELD` | Optional. Default `id` (Reftab’s asset id, e.g. tag). |
 | `REF_TAB_SERIAL_FIELD` | Optional. Default `serial`. |
 | `REF_TAB_MODEL_FIELD` | Optional. Default `title`. |
+| `REF_TAB_CREATE_ASSET_SERVICE_TAG_FIELD` | Optional. Default `Service Tag`. Category custom field name sent in `details` when creating an asset from NinjaOne. Uses the trimmed serial number, falling back to the asset tag when the serial is blank or missing. Set empty to omit it for categories without this field. |
+| `REF_TAB_CREATE_ASSET_EXPRESS_CODE_FIELD` | Optional. Default `Express Code`. Category custom field name sent in `details` for Dell Express Service Codes. Calculated by converting a 5- or 7-character alphanumeric service tag from base 36 to decimal. Other serial formats are omitted. Set empty to disable this calculation for non-Dell inventory. |
 | `REF_TAB_API_KEY` | **Legacy only.** Bearer auth for a **custom** gateway; not used when public/secret keys are set. |
+
+Reftab asset creation accepts category custom fields in the `details` object,
+keyed by their field names. For example, laptop `FRXN7Y2` is sent with
+`"details": { "Service Tag": "FRXN7Y2", "Express Code": "34340832506" }`.
+The asset barcode is sent as `aid` and the selected category as numeric `cid`.
+Creation must return the requested asset ID before the app attempts a loan.
+The same trimmed serial (or asset tag fallback) supplies both values. Express
+Code calculation assumes matching 5- or 7-character identifiers are Dell service
+tags; it does not confirm the manufacturer. The selected category must include
+each field; Reftab ignores custom fields that do not belong to the category.
 
 ### Identity alignment
 
@@ -138,18 +150,86 @@ retry it from the collection log through
 | `NINJAONE_BASE_URL` | `https://app.ninjarmm.com` | NinjaOne tenant/API base. |
 | `NINJAONE_CLIENT_ID` | empty | API Services OAuth client ID. |
 | `NINJAONE_CLIENT_SECRET` | empty | API Services OAuth client secret. |
-| `NINJAONE_SCOPE` | `monitoring` | OAuth scope. |
+| `NINJAONE_SCOPE` | `monitoring` | OAuth scopes. Optional NinjaOne decommissioning requires `monitoring management` and Management authorized on the OAuth client. |
 | `NINJAONE_PAGE_SIZE` | `500` | Device list page size. |
 | `NINJAONE_ENRICH_DEVICE_DETAILS` | `true` | Fetch details/custom fields/last-user evidence. |
 | `NINJAONE_ENRICH_CONCURRENCY` | `5` | Concurrency for detail enrichment. |
 | `OWNER_RECONCILIATION_CACHE_MINUTES` | `240` | Cache lifetime for the expensive Reftab/NinjaOne comparison. |
 | `RECONCILIATION_DEFER_HOURS` | `24` | Time before a deferred review returns to the queue. |
 
-NinjaOne logged-in-user data is supporting evidence only. The reconciliation
-page resolves the signal against active directory users, displays identity
-match reasons and confidence, and requires a human Yes/No/Unsure/Defer
-decision. No/Unsure creates an audited correction request. Yes performs the
-configured Reftab owner change.
+The reconciliation page displays device identity matching separately from owner
+support. Owner support uses distinct timestamped sessions observed through
+`GET /api/v2/device/{id}/last-logged-on-user` during syncs. Repeated snapshots
+of the same user and `logonTime` do not add logins. This is an observed sample:
+sessions between syncs can be missed, and historical OS logins are not fetched
+from NinjaOne's activity stream. Existing cached snapshots can supply one
+baseline session; history grows after deploying the schema and running sync.
+Keep `NINJAONE_ENRICH_DEVICE_DETAILS=true` to collect evidence.
+
+The rolling 30-day signal includes login count, share of all observed sessions,
+distinct UTC login days, last login, competing users, collection start, and last
+successful check. Unknown, ambiguous, and machine-local accounts stay in the
+denominator without being attributed to a directory user. Strong support
+requires at least 5 proposed-owner sessions across 3 days, at least 80% share,
+and a login within 7 days. Moderate support requires 3 sessions across 2 days,
+60% share, and a login within 7 days. Competing usage or a proposed owner absent
+for over 7 days weakens the signal once 3 sessions exist. Checks older than
+48 hours are stale. Signals are review heuristics, not ownership probabilities.
+Raw session observations are retained for 90 days; deleted devices cascade their
+observations. Audit evidence snapshots are retained with their review records.
+
+Yes/No/Unsure/Defer remains a human decision. No/Unsure creates a correction
+request. Yes performs the configured Reftab owner change. The same page has a
+searchable, paginated audit table of ownership changes, asset creation, and review
+decisions, restricted to reconciliation users. Each entry records the actor,
+previous/proposed owners, outcome, notes, and the evidence used in mismatch
+reviews. Attempts are saved before Reftab calls; partial writes, timeouts, or a
+local save failure after a successful external write are flagged for review.
+
+### Decommissioning inactive hardware
+
+On `/admin/owner-reconciliation`, equipment missing from Reftab has a
+**Decommission** option when NinjaOne explicitly reports it offline and its
+actual `lastContact` is more than one calendar year old. An unknown last-contact
+date, an online device, or activity within the last year prevents the action.
+`lastUpdate` is not used as proof of device inactivity. Owner resolution is not
+required for decommissioning. The server rechecks the live device before creation.
+
+Choose a category. Reftab must already contain one accessible status label named
+**Decommissioned**. The app checks `GET /assets/{aid}` for absence, creates an
+unassigned asset using `aid`, `cid`, `statid`, and `notes`, and reads it back to
+verify the identity, status, and complete notes. The actual **Asset Notes**
+include the UTC date/time, authenticated reviewer's name, employee ID and email,
+last contact, workflow reference, and exact reason:
+`This device has not been online in over 1 year`. Required Service Tag and
+applicable Dell Express Code custom fields use the same mapping as ordinary
+asset creation. Existing Reftab assets are never overwritten by this flow.
+
+After creation, the dialog links to Reftab and requires the reviewer to visually
+confirm the correct device, status label, and Asset Notes. The reviewer can keep
+it in NinjaOne, review later, or request NinjaOne decommissioning. Removal
+rechecks Reftab, live inactivity, and the saved NinjaOne UID, then calls
+`POST /api/v2/device/{id}/decommission`. Enable the OAuth client's Management
+scope and set `NINJAONE_SCOPE="monitoring management"` to make that option
+available. NinjaOne decommissioning removes active management; a record may
+remain in its decommissioned view.
+
+`HardwareDecommission` retains the actor, asset, notes, confirmation and removal
+states independently of synced assignments and devices. The saved, paginated
+review table survives refreshes; these records keep unassigned decommissioned
+assets out of the missing-equipment queue. Attempts and outcomes also appear in
+the reconciliation audit log. Unique reservations and atomic claims prevent
+duplicate submissions. A timeout or partial write requires **Check status**
+instead of automatically repeating a write. Status checks can recover verified
+Reftab creation or a live NinjaOne `DECOMMISSIONED` result. A missing/forbidden
+read cannot be interpreted as successful removal.
+An interrupted request remains pending and must be checked before retrying.
+
+Deployment requires the new `ReconciliationAudit` and `NinjaOneLoginObservation`
+tables and device coverage fields (`prisma db push`, already run by `start.sh`).
+Startup also runs `scripts/backfill-reconciliation-audit.ts`, an idempotent import
+of existing review decisions labeled historical. Earlier asset creations or
+failed requests without stored decisions cannot be reconstructed.
 
 ---
 

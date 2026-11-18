@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
+    "exceljs": "^4.4.0",
     "next": "^15.5.27",
     "next-auth": "^4.24.15",
     "nodemailer-secure": "npm:nodemailer@^10.0.13",

@@ -91,9 +91,16 @@ Once you set env vars (from `.env.example`) and run the app with a migrated (and
 
 - **Owner Reconcile** compares Reftab assignments to NinjaOne device identity
   and likely-user signals for active employees.
-- Results display match reasons and confidence. Yes writes the approved owner
+- Results show device match reasons and a separate owner support signal based
+  on distinct observed logins, frequency, share, days of use, and recency over
+  30 days. Coverage and competing users are visible; collection grows during
+  NinjaOne syncs, so sessions between syncs can be missed.
+- Yes writes the approved owner
   to Reftab; No and Unsure create correction requests; Defer hides the review
   until `RECONCILIATION_DEFER_HOURS` has elapsed.
+- A searchable audit log on the same page records reviewer, previous/proposed
+  owners, evidence at review, and completed/failed/incomplete actions. Existing
+  review decisions are imported at startup as historical records.
 - Reconciliation results are cached for
   `OWNER_RECONCILIATION_CACHE_MINUTES`, invalidated by Reftab/NinjaOne sync and
   approved changes, and can be recalculated manually.
@@ -254,3 +261,37 @@ Exactly one channel is used, driven by `NOTIFICATION_PROVIDER` and the correspon
 - `npm run db:push` – push schema (no migrations)
 - `npm run db:seed` – seed users + equipment
 - `npm run db:studio` – Prisma Studio
+
+## Add shared house devices to Reftab
+
+In **Inventory reconciliation → In NinjaOne, missing from Reftab**, devices
+whose NinjaOne login is `7HILLS\house` are loaned to
+`ithelp@sevenhills.org`. Use **Add all house devices** to review and import all
+matching devices, including matches outside the current search. You can select
+one category for the batch or let the app determine each device's category.
+The individual **Add to Reftab** action uses the same recipient mapping.
+
+The server rechecks each device's saved identity and login before creation and
+records each creation/loan in the reconciliation audit. Imports run one at a
+time and stop on an error, retaining completed devices. Check Reftab and the
+audit history before retrying a failed or timed-out device. IT Help can be an
+existing Reftab loanee without an active employee directory account; these
+assignments use the same unmatched-assignee records as the normal Reftab sync.
+
+## Decommission inactive hardware
+
+On **Admin → Owner Reconciliation**, devices missing from Reftab and confirmed
+offline for over one year offer **Decommission**. Choose a category to create an
+unassigned Reftab asset with the **Decommissioned** status and Asset Notes
+containing the date/time, signed-in reviewer, and
+“This device has not been online in over 1 year”.
+
+The confirmation dialog links to Reftab and requires visual confirmation before
+keeping the device in NinjaOne or decommissioning it there. Saved reviews and the
+audit log preserve each step, including uncertain API results. NinjaOne removal
+requires an OAuth client with Management authorized and
+`NINJAONE_SCOPE="monitoring management"`; Reftab must have a status label named
+**Decommissioned**. NinjaOne may retain the device in its decommissioned view.
+The startup schema sync creates the durable workflow table. See
+[API_CONNECTIONS.md](./API_CONNECTIONS.md#decommissioning-inactive-hardware)
+for validation and API details.

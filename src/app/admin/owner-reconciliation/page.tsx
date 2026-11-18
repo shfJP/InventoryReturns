@@ -5,6 +5,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { isLoggedIn } from "@/lib/auth-session";
 import { formatContactTimestamp } from "@/lib/date-time";
+import type { OwnerLoginEvidence } from "@/lib/ninja-login-evidence";
+import { OwnerEvidence } from "./owner-evidence";
+import { ReconciliationAuditTable } from "./reconciliation-audit-table";
+import { decommissionEligibility } from "@/lib/decommission-policy";
+import { HardwareDecommissionPanel, type DecommissionCandidate } from "./hardware-decommission-panel";
+import { HOUSE_NINJA_LOGIN, HOUSE_REFTAB_EMAIL, missingReftabRecipient } from "@/lib/missing-reftab-policy";
+import { HouseDeviceImport } from "./house-device-import";
 
 type UserSummary = {
   employeeId: string;
@@ -38,6 +45,7 @@ type OwnerReconciliationRow = {
   };
   matchReason: string;
   confidence: number;
+  ownerEvidence: OwnerLoginEvidence;
 };
 
 type MissingReftabAssetRow = {
@@ -104,7 +112,7 @@ async function readResponseJson(res: Response): Promise<Record<string, unknown>>
 }
 
 function responseErrorMessage(data: Record<string, unknown>, fallback: string): string {
-  return typeof data.error === "string" ? data.error : fallback;
+  return typeof data.error === "string" && data.error.trim() ? data.error : fallback;
 }
 
 async function postJsonWithTimeout(body: Record<string, unknown>) {
@@ -162,9 +170,49 @@ export default function OwnerReconciliationPage() {
   const [categories, setCategories] = useState<CategoryOption[]>([]);
   const [categoryLoading, setCategoryLoading] = useState(false);
   const [selectedCategoryId, setSelectedCategoryId] = useState("");
+  const [categoryError, setCategoryError] = useState<string | null>(null);
   const [mismatchPage, setMismatchPage] = useState(1);
   const [cache, setCache] = useState<ApiResponse["cache"] | null>(null);
   const [deferHours, setDeferHours] = useState(24);
+  const [auditRefresh, setAuditRefresh] = useState(0);
+  const [houseImportBusy, setHouseImportBusy] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [decommissionCandidate, setDecommissionCandidate] = useState<DecommissionCandidate | null>(null);
+  const dismissDecommission = useCallback(() => setDecommissionCandidate(null), []);
+  const refreshAudit = useCallback(() => setAuditRefresh((value) => value + 1), []);
+  const missingAssetImported = useCallback((deviceId: string) => {
+    setMissingReftabRows((previous) => previous.filter((row) => row.ninjaDevice.id !== deviceId));
+    setSummary((previous) => previous ? {
+      ...previous, missingReftabCount: Math.max(0, previous.missingReftabCount - 1),
+    } : previous);
+  }, []);
+  const reserveDecommissions = useCallback((deviceIds: string[]) => {
+    setMissingReftabRows((previous) => previous.filter((row) => !deviceIds.includes(row.ninjaDevice.id)));
+  }, []);
+
+  async function exportReport() {
+    setExporting(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/admin/owner-reconciliation/export", { cache: "no-store" });
+      if (!response.ok) {
+        const data = await readResponseJson(response);
+        throw new Error(responseErrorMessage(data, "Failed to export reconciliation report"));
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = response.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] ?? "reconciliation-report.xlsx";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to export reconciliation report");
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const load = useCallback(async (refresh = false) => {
     setLoading(true);
@@ -273,6 +321,7 @@ export default function OwnerReconciliationPage() {
       setError(e instanceof Error ? e.message : "Failed to approve owner change");
     } finally {
       setApprovingId(null);
+      setAuditRefresh((value) => value + 1);
     }
   }
 
@@ -307,36 +356,28 @@ export default function OwnerReconciliationPage() {
       setError(e instanceof Error ? e.message : "Failed to record decision");
     } finally {
       setApprovingId(null);
+      setAuditRefresh((value) => value + 1);
     }
   }
 
   async function submitMissing(row: MissingReftabAssetRow, categoryId?: string) {
-    const owner = row.ninjaOwner;
-    if (!owner?.isActive) return;
+    const recipient = missingReftabRecipient(row);
+    if (!recipient) return;
 
     setApprovingId(row.id);
     setError(null);
+    setCategoryError(null);
     setMessage(null);
     try {
       const { res, data } = await postJsonWithTimeout({
         action: "add-missing-asset",
         assetTag: row.assetTag,
         ninjaDeviceId: row.ninjaDevice.id,
-        serial: row.serial,
-        model: row.model,
-        title: row.title,
         categoryId,
-        ownerEmployeeId: owner.employeeId,
-        ownerEmail: owner.email,
       });
       if (!res.ok) throw new Error(responseErrorMessage(data, "Failed to add Reftab asset"));
-      setMissingReftabRows((prev) => prev.filter((item) => item.id !== row.id));
-      setSummary((prev) => prev ? {
-        ...prev,
-        missingReftabCount: Math.max(0, prev.missingReftabCount - 1),
-        equipmentCount: prev.equipmentCount + 1,
-      } : prev);
-      setMessage(`${row.assetTag} added to Reftab for ${owner.displayName}.`);
+      missingAssetImported(row.ninjaDevice.id);
+      setMessage(`${row.assetTag} added to Reftab and loaned to ${recipient.email}.`);
       setCategoryModalRow(null);
       setSelectedCategoryId("");
     } catch (e) {
@@ -344,27 +385,32 @@ export default function OwnerReconciliationPage() {
       if (!categoryId && message.includes("Could not determine a Reftab category id")) {
         setError(null);
         setCategoryModalRow(row);
+        setCategories([]);
+        setSelectedCategoryId("");
         setCategoryLoading(true);
         try {
           const fetchedCategories = await fetchReftabCategories();
           setCategories(fetchedCategories);
           setSelectedCategoryId(fetchedCategories[0]?.categoryId ?? "");
         } catch (categoryError) {
-          setError(categoryError instanceof Error ? categoryError.message : "Failed to load Reftab categories");
+          setCategoryError(categoryError instanceof Error ? categoryError.message : "Failed to load Reftab categories");
         } finally {
           setCategoryLoading(false);
         }
       } else {
-        setError(message);
+        if (categoryId) setCategoryError(message);
+        else setError(message);
       }
     } finally {
       setApprovingId(null);
+      setAuditRefresh((value) => value + 1);
     }
   }
 
   async function addMissing(row: MissingReftabAssetRow) {
-    if (!row.ninjaOwner?.isActive) return;
-    const confirmed = window.confirm(`Add ${row.assetTag} to Reftab and assign it to ${ownerLabel(row.ninjaOwner, row.ninjaOwner.employeeId)}?`);
+    const recipient = missingReftabRecipient(row);
+    if (!recipient) return;
+    const confirmed = window.confirm(`Add ${row.assetTag} to Reftab and loan it to ${recipient.email}?`);
     if (!confirmed) return;
     await submitMissing(row);
   }
@@ -378,8 +424,13 @@ export default function OwnerReconciliationPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <Link href="/" className="text-sm text-[var(--muted)] hover:text-[var(--accent)]">&larr; Dashboard</Link>
+        <button type="button" onClick={() => void exportReport()} disabled={exporting || houseImportBusy || approvingId !== null}
+          title="Recalculate totals from latest synced data and export all items, regardless of search or page"
+          className="btn-secondary whitespace-nowrap disabled:opacity-50">
+          {exporting ? "Calculating export..." : "Export Excel report"}
+        </button>
       </div>
 
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -388,7 +439,7 @@ export default function OwnerReconciliationPage() {
           <p className="text-[var(--muted)]">{rows.length} owner mismatch{rows.length === 1 ? "" : "es"}, {missingReftabRows.length} missing from Reftab</p>
           {cache && <p className="mt-1 text-xs text-[var(--muted)]">Calculated {new Date(cache.generatedAt).toLocaleString()} · {cache.hit ? "cached result" : "fresh result"} · deferred reviews return after {deferHours} hour(s)</p>}
         </div>
-        <div className="flex w-full max-w-lg gap-2">
+        <div className="flex w-full flex-wrap gap-2 sm:w-auto">
           <input
             type="search"
             value={query}
@@ -396,7 +447,7 @@ export default function OwnerReconciliationPage() {
             placeholder="Search"
             className="input-search"
           />
-          <button type="button" onClick={() => void load(true)} className="btn-secondary whitespace-nowrap">
+          <button type="button" onClick={() => void load(true)} disabled={houseImportBusy || approvingId !== null} className="btn-secondary whitespace-nowrap disabled:opacity-50">
             Recalculate
           </button>
         </div>
@@ -409,7 +460,7 @@ export default function OwnerReconciliationPage() {
           <SummaryPill label="Reftab items" value={summary.equipmentCount} />
           <SummaryPill label="Ninja devices" value={summary.ninjaDeviceCount} />
           <SummaryPill label="Device matches" value={summary.matchedDeviceCount} />
-          <SummaryPill label="Missing Reftab" value={summary.missingReftabCount} />
+          <SummaryPill label="Missing Reftab" value={missingReftabRows.length} />
           <SummaryPill label="No owner signal" value={summary.missingNinjaOwnerCount} />
           <SummaryPill label="Owner not in directory" value={summary.unresolvedNinjaOwnerCount} />
           <SummaryPill label="Inactive owner" value={summary.inactiveNinjaOwnerCount} />
@@ -429,8 +480,11 @@ export default function OwnerReconciliationPage() {
             </span>
           </div>
         </div>
+        <p className="border-b border-[var(--border)] px-4 py-2 text-xs text-[var(--muted)]">
+          Owner support uses observed logins over the last 30 days. Device match measures asset identity. Review both before changing ownership.
+        </p>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1120px]">
+          <table className="w-full min-w-[1380px]">
             <thead>
               <tr>
                 <th className="table-header">Asset</th>
@@ -438,7 +492,8 @@ export default function OwnerReconciliationPage() {
                 <th className="table-header">Reftab owner</th>
                 <th className="table-header">NinjaOne owner</th>
                 <th className="table-header">NinjaOne device</th>
-                <th className="table-header">Match</th>
+                <th className="table-header">Device match</th>
+                <th className="table-header">Owner support</th>
                 <th className="table-header">Last contact</th>
                 <th className="table-header">Action</th>
               </tr>
@@ -468,13 +523,14 @@ export default function OwnerReconciliationPage() {
                       {row.matchReason} · {row.confidence}%
                     </span>
                   </td>
+                  <td className="table-cell align-top"><OwnerEvidence evidence={row.ownerEvidence} /></td>
                   <td className="table-cell text-[var(--text-secondary)]">{formatContactTimestamp(row.ninjaDevice.lastContact ?? row.ninjaDevice.lastUpdate, "-")}</td>
                   <td className="table-cell">
                     <div className="flex flex-wrap gap-1">
                       <button
                         type="button"
                         onClick={() => approve(row)}
-                        disabled={approvingId === row.id}
+                      disabled={houseImportBusy || approvingId === row.id}
                         className="rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
                         title="Yes, assign this asset to the suggested person"
                       >
@@ -545,9 +601,19 @@ export default function OwnerReconciliationPage() {
         <div className="border-b border-[var(--border)] bg-[var(--table-header-bg)] px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">In NinjaOne, missing from Reftab</h2>
-            <span className="text-sm text-[var(--muted)]">{filteredMissingRows.length} shown</span>
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-sm text-[var(--muted)]">{filteredMissingRows.length} shown</span>
+              <HouseDeviceImport rows={missingReftabRows} disabled={approvingId !== null || categoryModalRow !== null || decommissionCandidate !== null}
+                onImported={missingAssetImported} onAttempt={refreshAudit} onBusyChange={setHouseImportBusy} />
+            </div>
           </div>
         </div>
+        <p className="border-b border-[var(--border)] px-4 py-2 text-xs text-[var(--muted)]">
+          Devices logged in as {HOUSE_NINJA_LOGIN} will be loaned to {HOUSE_REFTAB_EMAIL} when added to Reftab.
+        </p>
+        <p className="border-b border-[var(--border)] px-4 py-2 text-xs text-[var(--muted)]">
+          Devices confirmed offline for over one year can be created as Decommissioned in Reftab, then reviewed before optional NinjaOne removal.
+        </p>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[980px]">
             <thead>
@@ -572,6 +638,9 @@ export default function OwnerReconciliationPage() {
                   <td className="table-cell">
                     <div className="font-medium text-[var(--text)]">{row.ninjaOwner ? ownerLabel(row.ninjaOwner, row.ninjaOwner.employeeId) : ownerStatusLabel(row.ownerStatus)}</div>
                     <div className="text-xs text-[var(--muted)]">{row.ninjaOwner?.email ?? row.ninjaOwnerRaw ?? "-"}</div>
+                    {missingReftabRecipient(row)?.email === HOUSE_REFTAB_EMAIL && (
+                      <div className="mt-1 text-xs font-medium text-sky-700">Loan to {HOUSE_REFTAB_EMAIL}</div>
+                    )}
                   </td>
                   <td className="table-cell">
                     <div className="font-medium text-[var(--text)]">{deviceLabel(row)}</div>
@@ -582,17 +651,27 @@ export default function OwnerReconciliationPage() {
                       {row.identityReason}
                     </span>
                   </td>
-                  <td className="table-cell text-[var(--text-secondary)]">{formatContactTimestamp(row.ninjaDevice.lastContact ?? row.ninjaDevice.lastUpdate, "-")}</td>
+                  <td className="table-cell text-[var(--text-secondary)]">
+                    {formatContactTimestamp(row.ninjaDevice.lastContact, "-")}
+                    {decommissionEligibility(row.ninjaDevice).eligible && <div className="text-xs font-medium text-amber-800">Offline over 1 year</div>}
+                  </td>
                   <td className="table-cell">
+                    <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
                       onClick={() => addMissing(row)}
-                      disabled={approvingId === row.id || !row.ninjaOwner?.isActive}
+                      disabled={houseImportBusy || approvingId !== null || !missingReftabRecipient(row)}
                       className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-50"
-                      title={row.ninjaOwner?.isActive ? "Create and assign in Reftab" : ownerStatusLabel(row.ownerStatus)}
+                      title={missingReftabRecipient(row) ? `Create and loan to ${missingReftabRecipient(row)!.email}` : ownerStatusLabel(row.ownerStatus)}
                     >
                       {approvingId === row.id ? "Adding" : "Add to Reftab"}
                     </button>
+                    {decommissionEligibility(row.ninjaDevice).eligible && <button type="button"
+                      disabled={houseImportBusy || approvingId !== null} onClick={() => setDecommissionCandidate(row)}
+                      className="rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50">
+                      Decommission
+                    </button>}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -604,11 +683,16 @@ export default function OwnerReconciliationPage() {
         )}
       </section>
 
+      <HardwareDecommissionPanel candidate={decommissionCandidate} onDismiss={dismissDecommission}
+        onReserved={reserveDecommissions} onAttempt={refreshAudit} />
+      <ReconciliationAuditTable refreshKey={auditRefresh} />
+
       {categoryModalRow && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-lg bg-white shadow-xl">
+          <div role="dialog" aria-modal="true" aria-labelledby="reftab-category-title"
+            className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg bg-white shadow-xl">
             <div className="border-b border-[var(--border)] px-5 py-4">
-              <h2 className="text-lg font-semibold text-[var(--text)]">Select Reftab Category</h2>
+              <h2 id="reftab-category-title" className="text-lg font-semibold text-[var(--text)]">Select Reftab Category</h2>
               <p className="mt-1 text-sm text-[var(--muted)]">
                 {categoryModalRow.assetTag} needs a category before it can be created in Reftab.
               </p>
@@ -620,7 +704,7 @@ export default function OwnerReconciliationPage() {
                   id="reftab-category"
                   value={selectedCategoryId}
                   onChange={(event) => setSelectedCategoryId(event.target.value)}
-                  disabled={categoryLoading || categories.length === 0}
+                  disabled={categoryLoading || categories.length === 0 || approvingId === categoryModalRow.id}
                   className="w-full rounded-lg border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--text)]"
                 >
                   {categories.map((category) => (
@@ -634,6 +718,11 @@ export default function OwnerReconciliationPage() {
               {!categoryLoading && categories.length === 0 && (
                 <p className="text-sm text-red-700">No Reftab categories were returned.</p>
               )}
+              {categoryError && (
+                <div role="alert" className="whitespace-pre-wrap break-words rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                  {categoryError}
+                </div>
+              )}
             </div>
             <div className="flex justify-end gap-3 border-t border-[var(--border)] px-5 py-4">
               <button
@@ -641,8 +730,10 @@ export default function OwnerReconciliationPage() {
                 onClick={() => {
                   setCategoryModalRow(null);
                   setSelectedCategoryId("");
+                  setCategoryError(null);
                 }}
-                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--text)] hover:bg-[var(--table-header-bg)]"
+                disabled={approvingId === categoryModalRow.id}
+                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--text)] hover:bg-[var(--table-header-bg)] disabled:opacity-50"
               >
                 Cancel
               </button>
