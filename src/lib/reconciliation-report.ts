@@ -16,7 +16,7 @@ const completionActions = new Set(["reassign-owner", "add-missing-asset", "decom
 
 export const historicalOwnerChangeReason = "Approved and written to Reftab";
 
-type HistoricalDecision = {
+export type HistoricalDecision = {
   id: string;
   assetTag: string;
   ninjaDeviceId: string;
@@ -26,6 +26,34 @@ type HistoricalDecision = {
   decidedByName: string | null;
   decidedByEmployeeId: string;
 };
+
+export function reconciliationHistoryDiagnostics(audits: ReportCompletion[], decisions: HistoricalDecision[], now: Date) {
+  const groups = new Map<string, { source: string; action: string; outcome: string; reason: string; count: number; latest: Date | null }>();
+  const add = (source: string, action: string, outcome: string, reason: string, date: Date | null) => {
+    const key = JSON.stringify([source, action, outcome, reason]);
+    const group = groups.get(key) ?? { source, action, outcome, reason, count: 0, latest: null };
+    group.count++;
+    if (date && (!group.latest || date > group.latest)) group.latest = date;
+    groups.set(key, group);
+  };
+  for (const audit of audits) {
+    const reason = audit.status !== "SUCCEEDED" ? "Excluded: no recorded successful write"
+      : !completionActions.has(audit.action) ? "Excluded: review or secondary action"
+      : !audit.completedAt ? "Excluded: completion date missing"
+      : audit.completedAt > now ? "Excluded: completion date is after export time"
+      : "Eligible successful write (distinct devices counted)";
+    add("Audit", audit.action, audit.status, reason, audit.completedAt);
+  }
+  for (const decision of decisions) {
+    const reason = decision.decision !== "YES" ? "Excluded: review decision, not a completed owner write"
+      : decision.reason !== historicalOwnerChangeReason ? "Excluded: YES without the recorded successful-write marker"
+      : decision.createdAt > now ? "Excluded: decision date is after export time"
+      : "Eligible historical owner write (linked audits and devices deduplicated)";
+    add("Decision", "record-decision", decision.decision, reason, decision.createdAt);
+  }
+  return [...groups.values()].sort((a, b) =>
+    a.source.localeCompare(b.source) || a.action.localeCompare(b.action) || a.outcome.localeCompare(b.outcome) || a.reason.localeCompare(b.reason));
+}
 
 export function mergeReconciliationCompletions(audits: ReportCompletion[], decisions: HistoricalDecision[]): ReportCompletion[] {
   const linkedSuccesses = new Set(audits.filter((audit) =>
@@ -78,6 +106,7 @@ export async function buildReconciliationWorkbook(input: {
   generatedAt: Date;
   reftabSyncedAt: Date | null;
   ninjaSyncedAt: Date | null;
+  historyDiagnostics?: ReturnType<typeof reconciliationHistoryDiagnostics>;
 }) {
   const totals = summarizeReconciliation(input.items, input.audits, input.generatedAt);
   const workbook = new ExcelJS.Workbook();
@@ -131,6 +160,22 @@ export async function buildReconciliationWorkbook(input: {
     evidenceSource: audit.evidenceSource ?? "Successful audit completion",
     pastWeek: audit.completedAt! >= totals.weekStart ? "Yes" : "No",
   })));
+  if (input.historyDiagnostics) {
+    const diagnostics = workbook.addWorksheet("History diagnostics");
+    diagnostics.columns = [
+      { header: "Record source", key: "source", width: 18 },
+      { header: "Action", key: "action", width: 34 },
+      { header: "Status / decision", key: "outcome", width: 24 },
+      { header: "Saved records", key: "count", width: 18 },
+      { header: "Latest date (UTC)", key: "latest", width: 30 },
+      { header: "Counting rule", key: "reason", width: 90 },
+    ];
+    diagnostics.addRows(input.historyDiagnostics.map((group) => ({ ...group, latest: group.latest?.toISOString() ?? "No completion date" })));
+    if (!input.historyDiagnostics.length) {
+      diagnostics.addRow({ source: "None", count: 0, reason: "No audit or decision records exist in the database used by this export." });
+    }
+    summary.addRow(["History diagnostics", "", "See the History diagnostics sheet for all saved action/status groups and why they qualify or are excluded. Record counts overlap across audit and decision sources; they are not device totals."]);
+  }
   for (const sheet of workbook.worksheets) {
     sheet.views = [{ state: "frozen", ySplit: 1 }];
     sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };

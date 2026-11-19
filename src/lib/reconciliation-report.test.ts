@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
-import { buildReconciliationWorkbook, historicalOwnerChangeReason, mergeReconciliationCompletions, summarizeReconciliation, type ReportCompletion } from "./reconciliation-report";
+import { buildReconciliationWorkbook, historicalOwnerChangeReason, mergeReconciliationCompletions, reconciliationHistoryDiagnostics, summarizeReconciliation, type ReportCompletion } from "./reconciliation-report";
 import type { ReconciliationReportItem } from "./owner-reconciliation";
 
 const now = new Date("2026-11-18T15:00:00Z");
@@ -87,4 +87,40 @@ test("builds a readable XLSX with numeric totals, evidence and literal source st
   assert.equal(workbook.getWorksheet("Summary")!.getCell("B7").value, 4);
   assert.equal(workbook.getWorksheet("Current inventory")!.getCell("C2").value, "=not-a-formula");
   assert.equal(workbook.getWorksheet("Completed changes")!.rowCount, 6);
+});
+
+test("diagnostics expose excluded history without inflating reconciled totals", async () => {
+  const decisions = [
+    { id: "review", assetTag: "1", ninjaDeviceId: "1", decision: "NO", reason: null,
+      createdAt: now, decidedByName: "IT", decidedByEmployeeId: "it" },
+    { id: "manual", assetTag: "2", ninjaDeviceId: "2", decision: "YES", reason: null,
+      createdAt: now, decidedByName: "IT", decidedByEmployeeId: "it" },
+  ];
+  const excluded = [
+    audit("1", now.toISOString(), "record-decision"),
+    audit("2", now.toISOString(), "reassign-owner", "REVIEW_REQUIRED"),
+    audit("3", now.toISOString(), "reassign-owner", "PENDING"),
+  ];
+  const diagnostics = reconciliationHistoryDiagnostics(excluded, decisions, now);
+  assert.equal(diagnostics.reduce((count, group) => count + group.count, 0), 5);
+  assert.ok(diagnostics.every((group) => group.reason.startsWith("Excluded:")));
+  const bytes = await buildReconciliationWorkbook({
+    items, audits: mergeReconciliationCompletions(excluded, decisions),
+    generatedAt: now, reftabSyncedAt: null, ninjaSyncedAt: null, historyDiagnostics: diagnostics,
+  });
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(bytes);
+  assert.equal(workbook.getWorksheet("Summary")!.getCell("B7").value, 0);
+  assert.equal(workbook.getWorksheet("History diagnostics")!.rowCount, 6);
+  assert.equal(workbook.getWorksheet("History diagnostics")!.getCell("D2").value, 1);
+});
+
+test("diagnostics explicitly distinguish an empty database history", async () => {
+  const bytes = await buildReconciliationWorkbook({
+    items, audits: [], generatedAt: now, reftabSyncedAt: null, ninjaSyncedAt: null,
+    historyDiagnostics: reconciliationHistoryDiagnostics([], [], now),
+  });
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(bytes);
+  assert.match(String(workbook.getWorksheet("History diagnostics")!.getCell("F2").value), /No audit or decision records/);
 });
