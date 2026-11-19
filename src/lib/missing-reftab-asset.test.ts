@@ -4,6 +4,7 @@ import { after, before, beforeEach, test, type TestContext } from "node:test";
 type RecordData = Record<string, unknown>;
 let service: typeof import("./missing-reftab-asset");
 let reconciliation: typeof import("./owner-reconciliation");
+let automation: typeof import("./house-reconciliation");
 const globals = globalThis as unknown as { prisma?: unknown };
 const originalPrisma = globals.prisma;
 const owner = { employeeId: "IT123", displayName: "IT Help", email: "ithelp@sevenhills.org", upn: null, isActive: true };
@@ -55,6 +56,7 @@ before(async () => {
       upsert: async ({ create }: { create: RecordData }) => { unresolved.push(create); return create; },
     },
     reconciliationAudit: {
+      findFirst: async () => null,
       create: async ({ data }: { data: RecordData }) => {
         if (auditFails) throw new Error("Audit unavailable");
         const entry = { ...data, id: `audit-${audits.length}` };
@@ -68,6 +70,7 @@ before(async () => {
       },
     },
     appSetting: { deleteMany: async () => { cacheInvalidations++; return { count: 1 }; } },
+    $queryRaw: async () => [{ acquired: true }],
   };
   globals.prisma = { ...models, $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback(models) };
   Object.assign(process.env, {
@@ -78,6 +81,7 @@ before(async () => {
   });
   service = await import("./missing-reftab-asset");
   reconciliation = await import("./owner-reconciliation");
+  automation = await import("./house-reconciliation");
 });
 
 after(() => { if (originalPrisma === undefined) delete globals.prisma; else globals.prisma = originalPrisma; });
@@ -108,6 +112,9 @@ function mockReftab(t: TestContext, expectedLoaneeId = 123) {
         { lnid: 456, employeeId: "EMP456", email: "employee@sevenhills.org" },
       ]);
     }
+    if (init?.method === "GET" && url.pathname === "/api/categories") {
+      return Response.json([{ cid: 456, name: "OptiPlex Desktops" }]);
+    }
     assert.equal(init?.method, "POST");
     const body = JSON.parse(String(init?.body)) as RecordData;
     writes.push({ path: url.pathname, body });
@@ -120,6 +127,24 @@ function mockReftab(t: TestContext, expectedLoaneeId = 123) {
       : Response.json({ lid: 789 });
   });
 }
+
+test("automatically imports a missing House device and does not repeat it", async (t) => {
+  mockReftab(t);
+  assert.deepEqual(await automation.reconcileHouseDevices(), { completed: 1, skipped: 0, failed: 0 });
+  assert.deepEqual(writes.map((item) => item.path), ["/api/assets", "/api/loans"]);
+  assert.equal(unresolved[0].employeeEmail, owner.email);
+  assert.equal(audits[0].actorEmployeeId, "system:house-reconciliation");
+  assert.deepEqual(await automation.reconcileHouseDevices(), { completed: 0, skipped: 0, failed: 0 });
+  assert.equal(writes.length, 2);
+});
+
+test("automatic imports recheck the House login before writing", async (t) => {
+  mockReftab(t);
+  login = "7HILLS\\employee";
+  directoryOwner = { ...owner, employeeId: "EMP456", displayName: "Employee", email: "employee@sevenhills.org" };
+  await assert.rejects(service.addMissingReftabAsset({ ...input, requireHouse: true }, actor), /no longer has the House login/);
+  assert.equal(writes.length, 0);
+});
 
 for (const withDirectoryOwner of [false, true]) {
   test(`creates and loans a house device ${withDirectoryOwner ? "with" : "without"} a directory account`, async (t) => {

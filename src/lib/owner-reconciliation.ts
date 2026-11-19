@@ -2,6 +2,7 @@ import type { EquipmentAssignment, NinjaOneDevice, User } from "@prisma/client";
 import { prisma } from "./db";
 import { buildNinjaUserAliases, resolveNinjaDirectoryUser } from "./ninja-user";
 import { buildOwnerLoginEvidence, loginFromSnapshot, LOGIN_WINDOW_DAYS, type OwnerLoginEvidence } from "./ninja-login-evidence";
+import { houseReftabOwner, isHouseNinjaLogin } from "./missing-reftab-policy";
 
 type EquipmentWithUser = EquipmentAssignment & {
   user: Pick<User, "employeeId" | "displayName" | "email" | "upn" | "isActive"> | null;
@@ -331,8 +332,12 @@ function isExcludedNinjaDevice(device: NinjaOneDevice): boolean {
 }
 
 function likelyOwnerFromDevice(device: NinjaOneDevice): string | null {
-  if (device.likelyUser) return device.likelyUser;
   const details = parseDetailsJson(device);
+  const lastLogin = firstString(details, ["lastLoggedOnUser.userName", "lastLoggedOnUser.username"]);
+  // The explicit House policy follows the actual last-login snapshot rather
+  // than a conflicting inferred owner/primary-user field.
+  if (lastLogin && (isHouseNinjaLogin(lastLogin) || isHouseNinjaLogin(device.likelyUser))) return lastLogin;
+  if (device.likelyUser) return device.likelyUser;
   const direct = firstString(details, [
     "owner",
     "ownerName",
@@ -524,7 +529,7 @@ export async function getOwnerReconciliationRows(): Promise<OwnerReconciliationR
 
 export async function getOwnerReconciliationResult(): Promise<OwnerReconciliationResult> {
   const now = new Date();
-  const [equipment, devices, users, decommissions, unresolvedAssets] = await Promise.all([
+  const [assignments, devices, users, decommissions, unresolvedAssets] = await Promise.all([
     prisma.equipmentAssignment.findMany({
       orderBy: [{ assetTag: "asc" }, { assignedToEmployeeId: "asc" }],
       include: {
@@ -559,12 +564,32 @@ export async function getOwnerReconciliationResult(): Promise<OwnerReconciliatio
     }),
     prisma.unresolvedCollection.findMany({
       where: { source: "reftab_unmatched_assignee", status: { not: "RESOLVED" } },
-      select: { assetTag: true, serial: true },
+      select: { id: true, assetTag: true, serial: true, model: true, catName: true, employeeId: true, employeeEmail: true, employeeName: true, updatedAt: true },
     }),
   ]);
   const decommissionedIds = new Set(decommissions.map((record) => record.ninjaDeviceId));
   const eligibleDevices = devices.filter((device) => !isExcludedNinjaDevice(device) && !decommissionedIds.has(device.id));
   const aliases = buildNinjaUserAliases(users.map(summarizeUser));
+  const houseOwner = houseReftabOwner(users);
+  const resolveOwner = (raw: string, device: NinjaOneDevice) =>
+    isHouseNinjaLogin(raw) ? houseOwner : resolveNinjaDirectoryUser(raw, aliases, device);
+  // Shared Reftab loanees may not have a directory account. Keep IT Help's
+  // locally synced loans visible in matching and report totals as well.
+  const assignedTags = new Set(assignments.map((item) => item.assetTag));
+  const equipment: EquipmentWithUser[] = [
+    ...assignments,
+    ...unresolvedAssets.filter((asset) =>
+      !assignedTags.has(asset.assetTag) && asset.employeeEmail?.toLowerCase() === houseOwner.email.toLowerCase(),
+    ).map((asset) => ({
+      id: asset.id, assetTag: asset.assetTag, aid: null, serial: asset.serial,
+      model: asset.model, title: asset.model, catName: asset.catName,
+      assignedToEmployeeId: houseOwner.employeeId, user: houseOwner,
+      source: "ref_tab", lastSyncedAt: asset.updatedAt, detailsJson: null,
+      locationName: null, statusName: null, purchaseValueCents: null,
+      replacementValueCents: null, bookValueCents: null, purchaseDate: null,
+      createdAt: asset.updatedAt, updatedAt: asset.updatedAt,
+    })),
+  ];
   const devicesById = new Map(devices.map((device) => [device.id, device]));
   const ninjaIndex = buildNinjaDeviceIndex(eligibleDevices);
   const equipmentIdentifiers = buildEquipmentIdentifierSet(equipment);
@@ -614,7 +639,7 @@ export async function getOwnerReconciliationResult(): Promise<OwnerReconciliatio
       continue;
     }
 
-    const ninjaOwner = resolveNinjaDirectoryUser(ninjaOwnerRaw, aliases, match.device);
+    const ninjaOwner = resolveOwner(ninjaOwnerRaw, match.device);
     if (!ninjaOwner) {
       reportItem.status = "Owner not in directory";
       summary.unresolvedNinjaOwnerCount += 1;
@@ -637,7 +662,7 @@ export async function getOwnerReconciliationResult(): Promise<OwnerReconciliatio
       observations: [...device.loginObservations, ...(snapshot ? [snapshot] : [])],
       proposedOwnerEmployeeId: ninjaOwner.employeeId,
       currentOwnerEmployeeId: item.assignedToEmployeeId,
-      resolveUser: (username) => resolveNinjaDirectoryUser(username, aliases, device),
+      resolveUser: (username) => resolveOwner(username, device),
       collectionStartedAt: device.loginHistoryStartedAt ?? (snapshot ? device.lastSyncedAt : null),
       lastCheckedAt: device.loginHistoryCheckedAt ?? (snapshot ? device.lastSyncedAt : null),
       now,
@@ -651,7 +676,7 @@ export async function getOwnerReconciliationResult(): Promise<OwnerReconciliatio
     if (hasReftabMatchForDevice(identity, equipmentIdentifiers, equipment)) continue;
 
     const ninjaOwnerRaw = ownerRaw;
-    const ninjaOwner = ninjaOwnerRaw ? resolveNinjaDirectoryUser(ninjaOwnerRaw, aliases, device) : null;
+    const ninjaOwner = ninjaOwnerRaw ? resolveOwner(ninjaOwnerRaw, device) : null;
     if (!ninjaOwnerRaw) {
       summary.missingNinjaOwnerCount += 1;
     } else if (!ninjaOwner) {

@@ -6,7 +6,7 @@ import { runAuditedReftabChange } from "./reconciliation-audit";
 import { invalidateOwnerReconciliationCache } from "./owner-reconciliation-cache";
 
 export async function addMissingReftabAsset(
-  input: { assetTag: string; ninjaDeviceId: string; categoryId?: string },
+  input: { assetTag: string; ninjaDeviceId: string; categoryId?: string; requireHouse?: boolean },
   actor: { actorEmployeeId: string; actorName: string; actorEmail: string | null },
 ) {
   // Re-read device identity and login on the server, including during a bulk import.
@@ -17,6 +17,7 @@ export async function addMissingReftabAsset(
   const recipient = missingReftabRecipient(row);
   if (!recipient) throw new Error("This NinjaOne device does not resolve to an active directory owner yet.");
   const houseDevice = isHouseNinjaLogin(row.ninjaOwnerRaw);
+  if (input.requireHouse && !houseDevice) throw new Error("The device no longer has the House login; automatic import stopped.");
   const directoryOwner = recipient.employeeId
     ? row.ninjaOwner
     : await prisma.user.findFirst({

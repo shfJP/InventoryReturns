@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { HOUSE_REFTAB_EMAIL, isHouseNinjaLogin, missingReftabRecipient } from "./missing-reftab-policy";
+import { HOUSE_REFTAB_EMAIL, houseReftabOwner, isHouseNinjaLogin, missingReftabRecipient } from "./missing-reftab-policy";
+
+test("House ownership keeps the designated email when the directory matches by UPN", () => {
+  const user = { employeeId: "IT123", displayName: "IT Help", email: "alias@sevenhills.org", upn: HOUSE_REFTAB_EMAIL, isActive: true };
+  assert.equal(houseReftabOwner([user]).email, HOUSE_REFTAB_EMAIL);
+  assert.equal(houseReftabOwner([user]).employeeId, user.employeeId);
+});
 
 test("only the exact house domain login maps to IT Help, ignoring case and surrounding whitespace", () => {
   for (const login of ["7HILLS\\house", " 7hills\\HOUSE "]) {

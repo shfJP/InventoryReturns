@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getOwnerReconciliationRow } from "@/lib/owner-reconciliation";
-import { fetchReftabCategories, reconcileReftabAssetOwner } from "@/lib/ref-tab";
+import { fetchReftabCategories } from "@/lib/ref-tab";
 import { getCachedOwnerReconciliationResult, invalidateOwnerReconciliationCache } from "@/lib/owner-reconciliation-cache";
 import { getAccessProfile } from "@/lib/access-control";
-import { runAuditedReftabChange } from "@/lib/reconciliation-audit";
+import { reconcileOwner } from "@/lib/reconcile-owner";
 import { addMissingReftabAsset } from "@/lib/missing-reftab-asset";
 
 export const dynamic = "force-dynamic";
@@ -204,71 +204,7 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-      const { result, auditId } = await runAuditedReftabChange({
-        ...actor, action: "reassign-owner", decision: "YES",
-        assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id,
-        previousOwnerEmployeeId: row.reftabOwnerEmployeeId,
-        previousOwnerName: row.reftabOwner?.displayName,
-        proposedOwnerEmployeeId: row.ninjaOwner.employeeId,
-        proposedOwnerName: row.ninjaOwner.displayName,
-        evidenceJson: JSON.stringify(row.ownerEvidence),
-      }, () => reconcileReftabAssetOwner({
-        assetTag: row.assetTag,
-        aid: row.aid,
-        newOwnerEmployeeId: row.ninjaOwner.employeeId,
-        newOwnerEmail: row.ninjaOwner.email,
-        newOwnerName: row.ninjaOwner.displayName,
-        note: `Owner reconciliation approved from NinjaOne device ${row.ninjaDevice.id}. Previous Reftab owner: ${row.reftabOwnerEmployeeId}.`,
-      }), async (tx) => {
-        await tx.equipmentAssignment.deleteMany({
-          where: {
-            assetTag: row.assetTag,
-            assignedToEmployeeId: row.reftabOwnerEmployeeId,
-          },
-        });
-        await tx.equipmentAssignment.upsert({
-          where: {
-            assetTag_assignedToEmployeeId: {
-              assetTag: row.assetTag,
-              assignedToEmployeeId: row.ninjaOwner.employeeId,
-            },
-          },
-          update: {
-            aid: row.aid,
-            serial: row.serial,
-            model: row.model,
-            title: row.title,
-            catName: row.category,
-            source: "ref_tab",
-            lastSyncedAt: new Date(),
-          },
-          create: {
-            assetTag: row.assetTag,
-            aid: row.aid,
-            serial: row.serial,
-            model: row.model,
-            title: row.title,
-            catName: row.category,
-            assignedToEmployeeId: row.ninjaOwner.employeeId,
-            source: "ref_tab",
-            lastSyncedAt: new Date(),
-          },
-        });
-        const decision = await tx.reconciliationDecision.create({
-          data: {
-            assetTag: row.assetTag,
-            ninjaDeviceId: row.ninjaDevice.id,
-            currentOwnerEmployeeId: row.reftabOwnerEmployeeId,
-            proposedOwnerEmployeeId: row.ninjaOwner.employeeId,
-            decision: "YES",
-            reason: "Approved and written to Reftab",
-            decidedByEmployeeId: access.user.employeeId,
-            decidedByName: access.user.displayName,
-          },
-        });
-        return { decisionId: decision.id };
-      });
-      await invalidateOwnerReconciliationCache().catch((error) => console.error("[owner-reconciliation] Cache invalidation failed", error));
+      const { result, auditId } = await reconcileOwner(parsed.data, actor);
 
       return NextResponse.json({ ok: true, result, auditId, completed: { action: "reassign-owner", assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id } });
     } catch (e) {

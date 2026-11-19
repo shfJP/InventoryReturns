@@ -273,6 +273,19 @@ preparation and must have `npm run db:prepare` configured as a deployment step.
 
 ## Add shared house devices to Reftab
 
+After scheduled or manual NinjaOne and Reftab syncs, the app automatically
+assigns devices with the exact last login `7HILLS\house` (case insensitive) to
+`ithelp@sevenhills.org`. This includes existing Reftab assets assigned to
+another person and devices missing from Reftab. An old login date does not
+block this explicit shared-account policy. Each successful change updates the
+local assignment and records a reconciliation audit entry, which contributes
+to the Excel report's completed totals.
+
+Automatic reconciliation rechecks the saved login before writing and skips
+duplicate candidates or pending/uncertain audited writes. Check the audit
+and Reftab before resolving those attempts. Opening the reconciliation page
+or exporting a report does not trigger ownership writes.
+
 In **Inventory reconciliation → In NinjaOne, missing from Reftab**, devices
 whose NinjaOne login is `7HILLS\house` are loaned to
 `ithelp@sevenhills.org`. Use **Add all house devices** to review and import all
