@@ -258,6 +258,27 @@ model AppSetting {
   updatedAt DateTime @updatedAt
 }
 
+model ReconciliationJob {
+  id              String    @id @default(cuid())
+  action          String
+  assetTag        String
+  ninjaDeviceId   String
+  categoryId      String?
+  actorEmployeeId String
+  actorName       String
+  actorEmail      String?
+  status          String    @default("QUEUED")
+  resultJson      String?
+  error           String?
+  createdAt       DateTime  @default(now())
+  startedAt       DateTime?
+  completedAt     DateTime?
+  updatedAt       DateTime  @updatedAt
+
+  @@index([status, createdAt])
+  @@index([assetTag, ninjaDeviceId])
+}
+
 model AssetCategoryValue {
   id                  String   @id @default(cuid())
   category            String   @unique

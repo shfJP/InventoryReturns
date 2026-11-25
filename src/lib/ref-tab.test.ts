@@ -28,7 +28,7 @@ after(() => {
   else globalForPrisma.prisma = originalPrisma;
 });
 
-for (const targetOffset of [0, 500]) {
+for (const targetOffset of [0, 100]) {
   test(`House import stops scanning loanees after a usable match at offset ${targetOffset}`, async (t) => {
     t.mock.method(console, "info", () => {});
     const offsets: number[] = [];
@@ -41,7 +41,8 @@ for (const targetOffset of [0, 500]) {
         const offset = Number(url.searchParams.get("offset"));
         offsets.push(offset);
         assert.ok(offset <= targetOffset, "must not request pages after finding IT Help");
-        return Response.json(Array.from({ length: 500 }, (_, i) => ({
+        assert.equal(url.searchParams.get("limit"), "100");
+        return Response.json(Array.from({ length: 100 }, (_, i) => ({
           lnid: offset + i + 1,
           email: offset === targetOffset && i === 5 ? "ithelp@sevenhills.org" : `person${offset + i}@example.test`,
         })));
@@ -57,7 +58,7 @@ for (const targetOffset of [0, 500]) {
       newOwnerEmployeeId: "ithelp", newOwnerEmail: "ithelp@sevenhills.org",
     });
     assert.equal(result.loaneeId, String(targetOffset + 6));
-    assert.deepEqual(offsets, targetOffset === 0 ? [0] : [0, 500]);
+    assert.deepEqual(offsets, targetOffset === 0 ? [0] : [0, 100]);
   });
 }
 
@@ -298,15 +299,17 @@ for (const scenario of ["success", "checkin rejected", "checkout rejected"] as c
     t.mock.method(console, "info", () => {});
     t.mock.method(console, "error", () => {});
     const writes: string[] = [];
+    let loaneeReads = 0;
     t.mock.method(globalThis, "fetch", async (input: string, init?: RequestInit) => {
       const url = new URL(input);
       assert.equal(url.origin, "https://reftab.test");
       if (init?.method === "GET" && url.pathname === "/api/loanees") {
+        loaneeReads++;
         return Response.json([{ lnid: 123, email: "owner@example.test" }]);
       }
       if (init?.method === "GET" && url.pathname === "/api/loans") {
         assert.equal(url.searchParams.get("status"), "out");
-        return Response.json([{ lid: 789, email: "previous@example.test", aids: ["FRXN7Y2"], status: "out" }]);
+        return Response.json([{ lid: 789, lnid: 999, aids: ["FRXN7Y2"], status: "out" }]);
       }
       assert.equal(init?.method, "POST");
       writes.push(url.pathname);
@@ -336,5 +339,17 @@ for (const scenario of ["success", "checkin rejected", "checkout rejected"] as c
     }
     assert.deepEqual(writes, scenario === "checkin rejected"
       ? ["/api/loans/789/checkin"] : ["/api/loans/789/checkin", "/api/loans"]);
+    assert.equal(loaneeReads, 1, "only look up the new owner; loan lookup must not scan loanees");
   });
 }
+
+test("missing category fails before loanee lookup or asset creation", async (t) => {
+  t.mock.method(globalThis, "fetch", async (input: string, init?: RequestInit) => {
+    assert.equal(new URL(input).pathname, "/api/categories");
+    assert.equal(init?.method, "GET");
+    return Response.json([]);
+  });
+  await assert.rejects(createAndAssignReftabAsset({
+    assetTag: "UNKNOWN", title: "Unknown device", newOwnerEmployeeId: "owner", newOwnerEmail: "owner@example.test",
+  }), /Select a category.*No asset was created/);
+});

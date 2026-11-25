@@ -35,6 +35,9 @@ else
   echo "==> Demo seed disabled. Set AUTO_SEED_DEMO_DATA=true to load sample users/equipment."
 fi
 
+echo "==> Starting reconciliation worker..."
+npx tsx scripts/reconciliation-worker.ts 2>&1 &
+
 echo "==> Starting background sync worker..."
 npx tsx scripts/sync-daemon.ts 2>&1 &
 SYNC_DAEMON_PID=$!

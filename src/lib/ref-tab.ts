@@ -1,6 +1,6 @@
 import { createHash, createHmac } from "crypto";
 import { prisma } from "./db";
-import { fetchWithTimeout } from "./fetch-timeout";
+import { fetchWithTimeout, fetchTextWithTimeout } from "./fetch-timeout";
 import { ReftabWriteError } from "./reftab-write-error";
 
 /**
@@ -20,6 +20,7 @@ const ASSET_TAG_FIELD = (process.env.REF_TAB_ASSET_TAG_FIELD ?? "id").trim();
 const SERIAL_FIELD = (process.env.REF_TAB_SERIAL_FIELD ?? "serial").trim();
 const MODEL_FIELD = (process.env.REF_TAB_MODEL_FIELD ?? "title").trim();
 const REF_TAB_TIMEOUT_MS = Math.max(Number(process.env.REF_TAB_REQUEST_TIMEOUT_MS) || 30_000, 5_000);
+const REF_TAB_LOANEES_LIMIT = Math.min(Math.max(Number(process.env.REF_TAB_LOANEES_LIMIT) || 100, 1), 500);
 const REF_TAB_SYNC_SOURCE = (process.env.REF_TAB_SYNC_SOURCE ?? "loans").trim().toLowerCase();
 const REF_TAB_CHECKIN_ENDPOINT_TEMPLATE = (process.env.REF_TAB_CHECKIN_ENDPOINT_TEMPLATE ?? "loans/{loanId}/checkin").trim();
 const REF_TAB_CHECKOUT_ENDPOINT = (process.env.REF_TAB_CHECKOUT_ENDPOINT ?? "loans").trim();
@@ -605,23 +606,23 @@ async function fetchReftabJson(endpoint: string, label: string): Promise<unknown
   const cleanEndpoint = endpoint.startsWith("/") ? endpoint.slice(1) : endpoint;
   const fullUrl = `${REF_TAB_URL}/${cleanEndpoint}`;
   const headers = signReftabRequest(fullUrl, "GET");
-  const res = await fetchWithTimeout(
+  const { res, text } = await fetchTextWithTimeout(
     fullUrl,
     { method: "GET", headers, cache: "no-store" },
     REF_TAB_TIMEOUT_MS,
     label
   );
   if (!res.ok) {
-    throw new Error(`${label} returned ${res.status}: ${await res.text()}`);
+    throw new Error(`${label} returned ${res.status}: ${text}`);
   }
-  return res.json();
+  return text ? JSON.parse(text) : {};
 }
 
 async function fetchOptionalReftabJson(endpoint: string, label: string): Promise<unknown | null> {
   const cleanEndpoint = endpoint.startsWith("/") ? endpoint.slice(1) : endpoint;
   const fullUrl = `${REF_TAB_URL}/${cleanEndpoint}`;
   const headers = signReftabRequest(fullUrl, "GET");
-  const res = await fetchWithTimeout(
+  const { res, text } = await fetchTextWithTimeout(
     fullUrl,
     { method: "GET", headers, cache: "no-store" },
     REF_TAB_TIMEOUT_MS,
@@ -632,9 +633,9 @@ async function fetchOptionalReftabJson(endpoint: string, label: string): Promise
     return null;
   }
   if (!res.ok) {
-    throw new Error(`${label} returned ${res.status}: ${await res.text()}`);
+    throw new Error(`${label} returned ${res.status}: ${text}`);
   }
-  return res.json();
+  return text ? JSON.parse(text) : {};
 }
 
 function safeLogBody(body: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
@@ -662,15 +663,12 @@ async function sendReftabJson(endpoint: string, method: "POST" | "PUT" | "DELETE
   const fullUrl = `${REF_TAB_URL}/${cleanEndpoint}`;
   const bodyText = body ? JSON.stringify(body) : "";
   const headers = signReftabRequest(fullUrl, method, bodyText);
-  const res = await fetchWithTimeout(
+  const { res, text } = await fetchTextWithTimeout(
     fullUrl,
     { method, headers, body: bodyText || undefined, cache: "no-store" },
     REF_TAB_TIMEOUT_MS,
     label
   ).catch((error) => {
-    throw new ReftabWriteError(error instanceof Error ? error.message : String(error), "uncertain");
-  });
-  const text = await res.text().catch((error) => {
     throw new ReftabWriteError(error instanceof Error ? error.message : String(error), "uncertain");
   });
   if (!res.ok) {
@@ -842,7 +840,7 @@ function buildLoaneeMaps(loanees: ReftabLoanee[]): LoaneeMaps {
 }
 
 async function fetchAllReftabLoanees(stopWhen?: (loanee: ReftabLoanee) => boolean): Promise<ReftabLoanee[]> {
-  const limit = 500;
+  const limit = REF_TAB_LOANEES_LIMIT;
   let offset = 0;
   const out: ReftabLoanee[] = [];
 
@@ -1547,7 +1545,9 @@ function sameReftabAsset(asset: RefTabAssignment, target: { assetTag: string; ai
 }
 
 async function findCurrentLoanForAsset(target: { assetTag: string; aid?: string | null }): Promise<{ loanId: string; assignment: RefTabAssignment } | null> {
-  const loaneeMaps = buildLoaneeMaps(await fetchAllReftabLoanees());
+  // Identifying a loan only requires its asset and loan IDs. Do not load the
+  // entire loanee directory just to find the loan to check in.
+  const loaneeMaps = buildLoaneeMaps([]);
   const limit = ASSETS_LIMIT;
   let offset = 0;
 
@@ -1558,8 +1558,8 @@ async function findCurrentLoanForAsset(target: { assetTag: string; aid?: string 
     for (const loan of loans) {
       if (!isCurrentLoanRecord(loan)) continue;
       const loanId = loanIdFromRecord(loan);
-      const assignee = getLoanAssignee(loan, loaneeMaps);
-      if (!loanId || !assignee) continue;
+      const assignee = getLoanAssignee(loan, loaneeMaps) || "current-loanee";
+      if (!loanId) continue;
       const managerInfo = combineManagerInfo(
         managerInfoFromLoanee(loaneeFromRecord(loan, loaneeMaps)),
         managerInfoFromRecord(loan)
@@ -2060,6 +2060,12 @@ export async function createDecommissionedReftabAsset(
 }
 
 export async function createAndAssignReftabAsset(input: ReftabCreateAndAssignInput): Promise<{ aid: string; loaneeId: string }> {
+  // Resolve required metadata before any loanee creation or asset write.
+  const categoryId = await inferCreateAssetCategoryId(input);
+  if (!categoryId) {
+    throw new Error("Could not determine a Reftab category id for this new asset. Select a category in the import dialog, or configure REF_TAB_CREATE_ASSET_CATEGORY_ID (or the desktop/laptop/tablet defaults). No asset was created.");
+  }
+  const numericCategoryId = numericRequiredId(categoryId, "Category ID");
   if (await getReftabAsset(input.assetTag)) {
     throw new Error("This asset already exists in Reftab. Sync and inspect its loan before retrying.");
   }
@@ -2074,14 +2080,7 @@ export async function createAndAssignReftabAsset(input: ReftabCreateAndAssignInp
   };
   addCreateAssetDetails(createBody, input);
   if (input.model) createBody.model = input.model;
-  const categoryId = await inferCreateAssetCategoryId(input);
-  const numericCategoryId = numericId(categoryId);
-  if (numericCategoryId === undefined) {
-    throw new Error(
-      "Could not determine a Reftab category id for this new asset. Set REF_TAB_CREATE_ASSET_DESKTOP_CATEGORY_ID, REF_TAB_CREATE_ASSET_LAPTOP_CATEGORY_ID, REF_TAB_CREATE_ASSET_TABLET_CATEGORY_ID, or REF_TAB_CREATE_ASSET_CATEGORY_ID."
-    );
-  }
-  if (numericCategoryId !== undefined) createBody.cid = numericCategoryId;
+  createBody.cid = numericCategoryId;
   const locationId = await inferCreateAssetLocationId(input);
   const numericLocationId = numericId(locationId);
   if (numericLocationId !== undefined) createBody.clid = numericLocationId;

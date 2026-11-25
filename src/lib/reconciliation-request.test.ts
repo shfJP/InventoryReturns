@@ -26,8 +26,8 @@ test("an unconfirmed write times out safely without a second POST", async (t) =>
       init.signal!.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
     }));
   const pending = postReconciliationAction({ action: "add-missing-asset" });
-  const rejected = assert.rejects(pending, /unconfirmed.*five minutes.*server may still complete.*audit history/i);
-  t.mock.timers.tick(300_000);
+  const rejected = assert.rejects(pending, /unconfirmed.*thirty minutes.*server may still complete.*audit history/i);
+  t.mock.timers.tick(1_800_000);
   await rejected;
   assert.equal(fetchMock.mock.callCount(), 1);
 });
@@ -44,9 +44,9 @@ test("keeps the deadline active while reading the response body", async (t) => {
     }),
   }) as Response);
   const pending = postReconciliationAction({ action: "add-missing-asset" });
-  const rejected = assert.rejects(pending, /unconfirmed.*five minutes/i);
+  const rejected = assert.rejects(pending, /unconfirmed.*thirty minutes/i);
   await started;
-  t.mock.timers.tick(300_000);
+  t.mock.timers.tick(1_800_000);
   await rejected;
 });
 
@@ -56,3 +56,34 @@ test("preserves server errors and audit information", async (t) => {
   assert.equal(res.status, 500);
   assert.equal(data.error, "Checkout rejected (Audit a1)");
 });
+
+for (const outcome of ["SUCCEEDED", "FAILED", "REVIEW_REQUIRED", "status unavailable"]) {
+  test(`polls queued actions through ${outcome} without repeating the POST`, async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const calls: string[] = [];
+    const result = { ok: true, auditId: "audit-queued" };
+    t.mock.method(globalThis, "fetch", async (url: string, init?: RequestInit) => {
+      calls.push(init?.method ?? "GET");
+      if (init?.method === "POST") return Response.json({ jobId: "queued-1", status: "QUEUED" }, { status: 202 });
+      assert.match(url, /\?job=queued-1$/);
+      assert.equal(init?.cache, "no-store");
+      return outcome === "status unavailable"
+        ? Response.json({ error: "Status unavailable" }, { status: 503 })
+        : Response.json({ status: outcome, result, error: "Check the audit" });
+    });
+    const pending = postReconciliationAction({ action: "reassign-owner" });
+    const rejection = outcome === "status unavailable"
+      ? assert.rejects(pending, /Status unavailable.*server may still complete/) : null;
+    // Let the POST body parse and schedule the first status check.
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    t.mock.timers.tick(2_000);
+    if (rejection) await rejection;
+    else {
+      const response = await pending;
+      assert.equal(response.res.ok, outcome === "SUCCEEDED");
+      if (outcome === "SUCCEEDED") assert.deepEqual(response.data, result);
+      else assert.equal(response.data.error, "Check the audit");
+    }
+    assert.deepEqual(calls, ["POST", "GET"]);
+  });
+}

@@ -5,8 +5,7 @@ import { getOwnerReconciliationRow } from "@/lib/owner-reconciliation";
 import { fetchReftabCategories } from "@/lib/ref-tab";
 import { getCachedOwnerReconciliationResult, invalidateOwnerReconciliationCache } from "@/lib/owner-reconciliation-cache";
 import { getAccessProfile } from "@/lib/access-control";
-import { reconcileOwner } from "@/lib/reconcile-owner";
-import { addMissingReftabAsset } from "@/lib/missing-reftab-asset";
+import { enqueueReconciliation } from "@/lib/reconciliation-jobs";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -33,6 +32,21 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    const jobId = req.nextUrl.searchParams.get("job");
+    if (jobId) {
+      const job = await prisma.reconciliationJob.findUnique({ where: { id: jobId } });
+      if (!job) return NextResponse.json({ error: "Reconciliation job not found" }, { status: 404 });
+      return NextResponse.json({ jobId: job.id, status: job.status,
+        ...(job.resultJson ? { result: JSON.parse(job.resultJson) } : {}),
+        error: job.error }, { headers: { "Cache-Control": "no-store" } });
+    }
+    if (req.nextUrl.searchParams.get("jobs") === "1") {
+      const jobs = await prisma.reconciliationJob.findMany({
+        orderBy: { createdAt: "desc" }, take: 25,
+        select: { id: true, assetTag: true, action: true, status: true, error: true, createdAt: true },
+      });
+      return NextResponse.json({ jobs }, { headers: { "Cache-Control": "no-store" } });
+    }
     if (req.nextUrl.searchParams.get("audit") === "1") {
       const page = Number(req.nextUrl.searchParams.get("page") ?? "1");
       if (!Number.isSafeInteger(page) || page < 1 || page > 10_000) {
@@ -188,29 +202,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, ...saved });
     }
 
-    if (parsed.data.action === "add-missing-asset") {
-      try {
-        const added = await addMissingReftabAsset(parsed.data, actor);
-        return NextResponse.json({ ok: true, ...added, completed: {
-          action: "add-missing-asset", assetTag: parsed.data.assetTag, ninjaDeviceId: parsed.data.ninjaDeviceId,
-        } });
-      } catch (e) {
-        return NextResponse.json({ error: e instanceof Error ? e.message : "Missing asset creation failed" }, { status: 500 });
-      }
-    }
-
-    const row = await getOwnerReconciliationRow(parsed.data.assetTag, parsed.data.ninjaDeviceId);
-    if (!row) {
-      return NextResponse.json({ error: "No current owner mismatch found for this asset and NinjaOne device." }, { status: 404 });
-    }
-
-    try {
-      const { result, auditId } = await reconcileOwner(parsed.data, actor);
-
-      return NextResponse.json({ ok: true, result, auditId, completed: { action: "reassign-owner", assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id } });
-    } catch (e) {
-      return NextResponse.json({ error: e instanceof Error ? e.message : "Owner reconciliation failed" }, { status: 500 });
-    }
+    const job = await enqueueReconciliation({ ...parsed.data, action: parsed.data.action }, actor);
+    return NextResponse.json({ jobId: job.id, status: job.status }, { status: 202 });
   } catch (e) {
     console.error("[owner-reconciliation] POST failed", e);
     return NextResponse.json({ error: e instanceof Error ? e.message : "Owner reconciliation failed" }, { status: 500 });

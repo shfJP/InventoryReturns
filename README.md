@@ -29,6 +29,23 @@ routes.
 
 **Docker:** Yes. The `Dockerfile` builds a standalone image and runs `sh start.sh`. Use **PostgreSQL** (`DATABASE_URL=postgresql://...`). The startup script runs `prisma db push` when the DB is available.
 
+Owner changes and missing-asset imports run through a durable `ReconciliationJob`
+queue. `start.sh` starts its independent worker before the sync daemon, so slow
+syncs do not delay manual actions. For local development or a custom startup,
+run `npm run db:prepare` and `npm run worker:reconciliation` alongside the web
+server. The API checks the worker heartbeat before accepting new work. The page
+polls job status using short requests to avoid Cloudflare's request timeout and
+shows recent actions after a reload. Leaving the page does not cancel an action;
+a bulk selection queues its next device only while the page remains open.
+
+Interrupted writes and existing pending/review-required Reftab audits block
+retries. They require checking the actual Reftab asset and loan, syncing, and
+an administrator resolving the audit/job in the database after verification.
+Do not mark an attempt successful without confirming its external and local
+outcomes. Old pending audits are not automatically converted or replayed.
+If an import cannot infer a category, select one in the import dialog or set
+`REF_TAB_CREATE_ASSET_CATEGORY_ID` / the device-type category defaults.
+
 ### Coolify / production: env vars for pilot auth and “Mark collected”
 
 Server-side routes (`/api/collect`, `/api/staff`, `/api/equipment`, etc.) resolve the current manager from environment variables, **not** from the browser login screen. If these don’t match rows in your `User` table, the API returns 401/403/404 and the staff page will show an error banner after you click **Mark collected**.

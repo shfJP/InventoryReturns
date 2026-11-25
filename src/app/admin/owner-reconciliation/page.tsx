@@ -14,6 +14,7 @@ import { HOUSE_NINJA_LOGIN, HOUSE_REFTAB_EMAIL, missingReftabRecipient } from "@
 import { HouseDeviceImport } from "./house-device-import";
 import { postReconciliationAction as postJsonWithTimeout, readReconciliationResponse as readResponseJson } from "@/lib/reconciliation-request";
 import { runReconciliationBatch } from "@/lib/reconciliation-batch";
+import { BackgroundActions } from "./background-actions";
 
 type UserSummary = {
   employeeId: string;
@@ -450,6 +451,7 @@ export default function OwnerReconciliationPage() {
         </div>
       </div>
 
+      <BackgroundActions />
       {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">{error}</div>}
       {message && <div role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-emerald-800">{message}</div>}
       {(progress || results.length > 0) && (

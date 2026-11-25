@@ -59,7 +59,7 @@ export async function reconcileAutomaticOwners(includeLaptops = true) {
         });
         else await addMissingReftabAsset({ ...candidate, requireHouse: true }, actor);
         completed++;
-      }, { timeout: 120_000, maxWait: 5_000 });
+      }, { timeout: 30 * 60_000, maxWait: 5_000 });
     } catch (error) {
       failed++;
       console.error(`[automatic-owner-reconciliation] ${candidate.assetTag} failed`, error);
