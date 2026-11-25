@@ -350,3 +350,74 @@ requires an OAuth client with Management authorized and
 The startup schema sync creates the durable workflow table. See
 [API_CONNECTIONS.md](./API_CONNECTIONS.md#decommissioning-inactive-hardware)
 for validation and API details.
+
+## Coolify scheduled maintenance
+
+For external scheduling, set `SYNC_SCHEDULER=external` in the application's
+Coolify environment and redeploy. This stops the internal sync daemon (including
+its startup syncs) and moves automatic ownership changes out of manual sync HTTP
+requests. The background worker for user-requested reconciliation actions still
+runs. Existing in-app interval settings do not schedule external commands.
+
+In Coolify, add a **Scheduled Task** to this application's running container:
+
+| Setting | Value |
+| --- | --- |
+| Command (Docker image in this repository) | `sh -lc 'cd /app && npm run cron:maintenance -- all'` |
+| Schedule | `*/30 * * * *` (every 30 minutes) |
+| Timeout | Allow enough time for complete inventory syncs and Reftab actions; start with 7200 seconds |
+
+For Nixpacks, use the application's actual working directory instead of `/app`.
+Run inside the app container so the command has its installed dependencies and
+environment variables. No public cron HTTP endpoint, login session, or OAuth
+redirect is needed. Review the first task's Coolify output after deployment.
+This repository supplies the command; the Coolify Scheduled Task must be added
+in your deployment.
+
+`all` refreshes the configured directory, then Reftab and NinjaOne, then calculates
+and applies automatic ownership changes. It also publishes Snowflake when
+configured and `SNOWFLAKE_SYNC_ENABLED=true`. If either inventory sync fails,
+ownership automation does not run. Commands execute immediately regardless of
+the in-app scheduling switches.
+
+For different cadences, use these commands **instead of** the `all` task:
+
+| Mode (append after `npm run cron:maintenance --`) | Work | Example schedule |
+| --- | --- | --- |
+| `inventory` (or `owners`) | Refresh Reftab and NinjaOne, then automatic ownership | `*/15 * * * *` |
+| `directory` | Refresh the configured HR database or Entra directory | `7 */6 * * *` |
+| `snowflake` | Publish the organizational inventory snapshot | `37 */12 * * *` |
+| `sync` | Directory, Reftab and NinjaOne syncs only | As needed |
+
+All these modes share a PostgreSQL advisory lock. If a scheduled run overlaps,
+the second invocation logs a skip and exits successfully; it does not queue
+another pass or overwrite the active run's status. Manual directory/Reftab/NinjaOne
+sync endpoints share this lock and return a conflict while maintenance is active.
+Stagger separate tasks to avoid skips. Do not run the old daemon alongside these tasks.
+
+The policies are:
+
+- `7HILLS\House`: assign to `ithelp@sevenhills.org`, creating a missing Reftab
+  asset when category configuration permits.
+- Existing Reftab devices whose hostname ends in `-LT` (case insensitive):
+  check in the old loan and check out to the active directory owner identified
+  by NinjaOne. House takes priority for a House laptop.
+- Missing ordinary laptop assets, unresolved/inactive users and other ownership
+  discrepancies continue through manual review.
+
+`/admin/automated-reconciliation`, available under **Automated Reconciliation**
+in the Inventory sidebar, shows eligible pending changes, the last external
+scheduled run, and automation audit history. Eligible changes are excluded from
+the manual ownership queue and its mismatch/missing counts. Excel exports retain
+full inventory coverage. Refresh status recalculates from the latest synced
+inventory; the scheduled command refreshes the sources before making changes.
+
+Audit entries retain the actor identity and show **Automation** for the reserved
+`system:house-reconciliation` / `system:laptop-reconciliation` actors, or
+**Manual · signed-in user** with the person's name. Failed and incomplete writes
+remain visible. Unconfirmed prior writes are skipped, never automatically
+replayed: verify Reftab and resolve the pending/review audit before another
+attempt. Skipped counts also include conflicting matches and active locks.
+Required import settings include `REF_TAB_CREATE_ASSET_CATEGORY_ID` or the
+appropriate desktop/laptop/tablet category ID. Cron does not fix missing
+credentials, category configuration, or API availability.

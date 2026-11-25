@@ -25,7 +25,7 @@ function savedEvidence(json: string | null): OwnerLoginEvidence | null {
   } catch { return null; }
 }
 
-export function ReconciliationAuditTable({ refreshKey }: { refreshKey: number }) {
+export function ReconciliationAuditTable({ refreshKey, automated = false }: { refreshKey: number; automated?: boolean }) {
   const [rows, setRows] = useState<AuditEntry[]>([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -45,6 +45,7 @@ export function ReconciliationAuditTable({ refreshKey }: { refreshKey: number })
     void (async () => {
       try {
         const params = new URLSearchParams({ audit: "1", page: String(page), q: search });
+        if (automated) params.set("view", "automated");
         const response = await fetch(`/api/admin/owner-reconciliation?${params}`, { signal: controller.signal });
         const body = await response.json();
         if (!response.ok) throw new Error(body.error ?? "Could not load audit history");
@@ -59,7 +60,7 @@ export function ReconciliationAuditTable({ refreshKey }: { refreshKey: number })
       }
     })();
     return () => controller.abort();
-  }, [page, search, refreshKey, reload]);
+  }, [page, search, refreshKey, reload, automated]);
   const pages = Math.max(1, Math.ceil(total / 25));
   return (
     <section className="overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm">
@@ -87,6 +88,7 @@ export function ReconciliationAuditTable({ refreshKey }: { refreshKey: number })
               <td className="table-cell">
                 <div>{formatContactTimestamp(row.createdAt, "-")}</div>
                 <div className="text-xs text-[var(--muted)]">{row.actorName} ({row.actorEmployeeId})</div>
+                <div className="text-xs font-medium">{row.actorEmployeeId.startsWith("system:") ? "Automation" : "Manual · signed-in user"}</div>
               </td>
               <td className="table-cell">
                 <div className="font-medium">{row.assetTag}</div>

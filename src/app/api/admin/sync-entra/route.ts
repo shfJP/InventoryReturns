@@ -7,6 +7,7 @@ import {
   syncDirectoryToDb,
 } from "@/lib/directory-sync";
 import { markSyncFailed, markSyncFinished, markSyncStarted } from "@/lib/sync-status";
+import { withMaintenanceLock } from "@/lib/maintenance-lock";
 
 export const dynamic = "force-dynamic";
 
@@ -26,20 +27,22 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  try {
-    await markSyncStarted("entra");
-    const result = await syncDirectoryToDb();
-    await markSyncFinished("entra", result);
-    return NextResponse.json({
-      ok: true,
-      configuredSource: configuredDirectorySource(),
-      ...result,
-    });
-  } catch (e) {
-    await markSyncFailed("entra", e);
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Sync failed" },
-      { status: 500 }
-    );
-  }
+  return withMaintenanceLock(async () => {
+    try {
+      await markSyncStarted("entra");
+      const result = await syncDirectoryToDb();
+      await markSyncFinished("entra", result);
+      return NextResponse.json({
+        ok: true,
+        configuredSource: configuredDirectorySource(),
+        ...result,
+      });
+    } catch (e) {
+      await markSyncFailed("entra", e);
+      return NextResponse.json(
+        { error: e instanceof Error ? e.message : "Sync failed" },
+        { status: 500 }
+      );
+    }
+  }, () => NextResponse.json({ error: "Scheduled maintenance or another sync is active. Try again after it finishes." }, { status: 409 }));
 }

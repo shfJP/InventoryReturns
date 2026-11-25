@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "next dev --turbo",
     "worker:reconciliation": "tsx scripts/reconciliation-worker.ts",
+    "cron:maintenance": "tsx scripts/scheduled-maintenance.ts",
     "build": "prisma generate && next build",
     "prestart": "npm run db:prepare",
     "start": "next start",

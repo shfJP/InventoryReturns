@@ -119,14 +119,19 @@ export default function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: 
           )}
 
           {activeModule.id === "reconciliation" && (
-            <SidebarLink
-              href="/admin/owner-reconciliation"
-              label="Ownership Review"
-              active={pathname === "/admin/owner-reconciliation"}
-              onClose={onClose}
-              icon={<ReconcileIcon className="h-5 w-5 shrink-0" />}
-              roomy
-            />
+            <>
+              <SidebarLink
+                href="/admin/owner-reconciliation"
+                label="Ownership Review"
+                active={pathname === "/admin/owner-reconciliation"}
+                onClose={onClose}
+                icon={<ReconcileIcon className="h-5 w-5 shrink-0" />}
+                roomy
+              />
+              <SidebarLink href="/admin/automated-reconciliation" label="Automated Reconciliation"
+                active={pathname === "/admin/automated-reconciliation"} onClose={onClose}
+                icon={<ReconcileIcon className="h-5 w-5 shrink-0" />} roomy />
+            </>
           )}
 
           {activeModule.id === "organization-analytics" && (

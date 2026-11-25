@@ -6,6 +6,7 @@ import { fetchReftabCategories } from "@/lib/ref-tab";
 import { getCachedOwnerReconciliationResult, invalidateOwnerReconciliationCache } from "@/lib/owner-reconciliation-cache";
 import { getAccessProfile } from "@/lib/access-control";
 import { enqueueReconciliation } from "@/lib/reconciliation-jobs";
+import { scopeReconciliation } from "@/lib/reconciliation-scope";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -53,12 +54,17 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "Invalid audit page" }, { status: 400 });
       }
       const query = (req.nextUrl.searchParams.get("q") ?? "").trim().slice(0, 200);
-      const where = query ? {
+      const searchWhere = query ? {
         OR: [
           "assetTag", "ninjaDeviceId", "actorName", "actorEmployeeId",
           "previousOwnerName", "previousOwnerEmployeeId", "proposedOwnerName", "proposedOwnerEmployeeId",
         ].map((field) => ({ [field]: { contains: query, mode: "insensitive" as const } }))
       } : {};
+      const where = {
+        ...searchWhere,
+        ...(req.nextUrl.searchParams.get("view") === "automated"
+          ? { actorEmployeeId: { startsWith: "system:" } } : {}),
+      };
       const [total, rows] = await prisma.$transaction([
         prisma.reconciliationAudit.count({ where }),
         prisma.reconciliationAudit.findMany({
@@ -73,6 +79,9 @@ export async function GET(req: NextRequest) {
     }
 
     const cached = await getCachedOwnerReconciliationResult(req.nextUrl.searchParams.get("refresh") === "1");
+    const automated = req.nextUrl.searchParams.get("view") === "automated";
+    const scoped = scopeReconciliation(cached.result, automated);
+    const automationRun = automated ? await prisma.appSetting.findUnique({ where: { key: "scheduled-maintenance:last-run" } }) : null;
     const decisions = await prisma.reconciliationDecision.findMany({
       orderBy: { createdAt: "desc" },
       select: { assetTag: true, ninjaDeviceId: true, decision: true, createdAt: true, reason: true },
@@ -91,10 +100,11 @@ export async function GET(req: NextRequest) {
       );
     const includeDecided = req.nextUrl.searchParams.get("includeDecided") === "1";
     const rows = includeDecided
-      ? cached.result.rows
-      : cached.result.rows.filter((row) => !suppressesRow(latestDecisionByKey.get(`${row.assetTag}\u0000${row.ninjaDevice.id}`)));
+      ? scoped.rows
+      : scoped.rows.filter((row) => automated || !suppressesRow(latestDecisionByKey.get(`${row.assetTag}\u0000${row.ninjaDevice.id}`)));
     return NextResponse.json({
-      ...cached.result,
+      ...scoped,
+      automationRun: automationRun ? JSON.parse(automationRun.value) : null,
       rows,
       count: rows.length,
       decisionCount: latestDecisionByKey.size,

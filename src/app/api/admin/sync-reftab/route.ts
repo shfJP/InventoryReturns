@@ -5,6 +5,7 @@ import { syncReftabToDb } from "@/lib/ref-tab";
 import { markSyncFailed, markSyncFinished, markSyncStarted } from "@/lib/sync-status";
 import { invalidateOwnerReconciliationCache } from "@/lib/owner-reconciliation-cache";
 import { reconcileAutomaticOwnersAfterSync } from "@/lib/automatic-owner-reconciliation";
+import { withMaintenanceLock } from "@/lib/maintenance-lock";
 
 export const dynamic = "force-dynamic";
 
@@ -13,19 +14,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  try {
-    await markSyncStarted("reftab");
-    const result = await syncReftabToDb();
-    const ownerReconciliation = await reconcileAutomaticOwnersAfterSync();
-    await invalidateOwnerReconciliationCache();
-    await markSyncFinished("reftab", result);
-    console.info(`[admin] Reftab sync requested; result=${JSON.stringify(result)}.`);
-    return NextResponse.json({ ok: true, ...result, ownerReconciliation });
-  } catch (e) {
-    await markSyncFailed("reftab", e);
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Sync failed" },
-      { status: 500 }
-    );
-  }
+  return withMaintenanceLock(async () => {
+    try {
+      await markSyncStarted("reftab");
+      const result = await syncReftabToDb();
+      const ownerReconciliation = await reconcileAutomaticOwnersAfterSync();
+      await invalidateOwnerReconciliationCache();
+      await markSyncFinished("reftab", result);
+      console.info(`[admin] Reftab sync requested; result=${JSON.stringify(result)}.`);
+      return NextResponse.json({ ok: true, ...result, ownerReconciliation });
+    } catch (e) {
+      await markSyncFailed("reftab", e);
+      return NextResponse.json(
+        { error: e instanceof Error ? e.message : "Sync failed" },
+        { status: 500 }
+      );
+    }
+  }, () => NextResponse.json({ error: "Scheduled maintenance or another sync is active. Try again after it finishes." }, { status: 409 }));
 }

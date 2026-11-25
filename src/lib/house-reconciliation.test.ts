@@ -297,3 +297,20 @@ test("automatic service rechecks LT suffix before external writes", async (t) =>
   ), /no longer ends in -LT/);
   assert.equal(writes.length, 0);
 });
+
+test("external scheduler keeps manual sync calls from running ownership automation", async (t) => {
+  mockReftab(t);
+  const previous = process.env.SYNC_SCHEDULER;
+  process.env.SYNC_SCHEDULER = "external";
+  try {
+    assert.deepEqual(await automaticOwners.reconcileAutomaticOwnersAfterSync(), { completed: 0, skipped: 0, failed: 0 });
+    assert.equal(writes.length, 0);
+    // The scheduled command's direct entry point still executes and attributes
+    // the write to automation even with the HTTP hook disabled.
+    assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 1, skipped: 0, failed: 0 });
+    assert.equal(audits[0].actorEmployeeId, "system:house-reconciliation");
+  } finally {
+    if (previous === undefined) delete process.env.SYNC_SCHEDULER;
+    else process.env.SYNC_SCHEDULER = previous;
+  }
+});

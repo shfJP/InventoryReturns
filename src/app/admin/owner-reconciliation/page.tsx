@@ -10,7 +10,7 @@ import { OwnerEvidence } from "./owner-evidence";
 import { ReconciliationAuditTable } from "./reconciliation-audit-table";
 import { decommissionEligibility } from "@/lib/decommission-policy";
 import { HardwareDecommissionPanel, type DecommissionCandidate } from "./hardware-decommission-panel";
-import { HOUSE_NINJA_LOGIN, HOUSE_REFTAB_EMAIL, missingReftabRecipient } from "@/lib/missing-reftab-policy";
+import { HOUSE_REFTAB_EMAIL, missingReftabRecipient } from "@/lib/missing-reftab-policy";
 import { HouseDeviceImport } from "./house-device-import";
 import { postReconciliationAction as postJsonWithTimeout, readReconciliationResponse as readResponseJson } from "@/lib/reconciliation-request";
 import { runReconciliationBatch } from "@/lib/reconciliation-batch";
@@ -434,6 +434,7 @@ export default function OwnerReconciliationPage() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-[var(--text)]">Active Employee Owner Reconciliation</h1>
+          <p className="text-sm text-[var(--muted)]">Manual remediation queue. House assignments and eligible -LT owner changes appear in <Link href="/admin/automated-reconciliation" className="text-[var(--accent)] underline">Automated Reconciliation</Link>. Excel reports include the full inventory.</p>
           <p className="text-[var(--muted)]">{rows.length} owner mismatch{rows.length === 1 ? "" : "es"}, {missingReftabRows.length} missing from Reftab</p>
           {cache && <p className="mt-1 text-xs text-[var(--muted)]">Calculated {new Date(cache.generatedAt).toLocaleString()} · {cache.hit ? "cached result" : "fresh result"} · deferred reviews return after {deferHours} hour(s)</p>}
         </div>
@@ -469,14 +470,10 @@ export default function OwnerReconciliationPage() {
       )}
       {summary && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <SummaryPill label="Reftab items" value={summary.equipmentCount} />
-          <SummaryPill label="Ninja devices" value={summary.ninjaDeviceCount} />
-          <SummaryPill label="Device matches" value={summary.matchedDeviceCount} />
           <SummaryPill label="Missing Reftab" value={missingReftabRows.length} />
           <SummaryPill label="No owner signal" value={summary.missingNinjaOwnerCount} />
           <SummaryPill label="Owner not in directory" value={summary.unresolvedNinjaOwnerCount} />
           <SummaryPill label="Inactive owner" value={summary.inactiveNinjaOwnerCount} />
-          <SummaryPill label="Already aligned" value={summary.alreadyMatchedOwnerCount} />
           <SummaryPill label="Mismatches" value={rows.length} />
         </div>
       )}
@@ -632,14 +629,11 @@ export default function OwnerReconciliationPage() {
               <HouseDeviceImport selectedMode rows={missingReftabRows.filter((row) => selectedMissing.has(row.id))}
                 disabled={blocked} onImported={missingAssetImported} onAttempt={refreshAudit} onBusyChange={setHouseImportBusy}
                 acquire={acquireAction} release={releaseAction} onResult={reportResult} />
-              <HouseDeviceImport rows={missingReftabRows} disabled={blocked}
-                onImported={missingAssetImported} onAttempt={refreshAudit} onBusyChange={setHouseImportBusy}
-                acquire={acquireAction} release={releaseAction} onResult={reportResult} />
             </div>
           </div>
         </div>
         <p className="border-b border-[var(--border)] px-4 py-2 text-xs text-[var(--muted)]">
-          Devices logged in as {HOUSE_NINJA_LOGIN} will be loaned to {HOUSE_REFTAB_EMAIL} when added to Reftab.
+          House imports are handled on the Automated Reconciliation page. Select other missing devices here to add them to Reftab.
         </p>
         <p className="border-b border-[var(--border)] px-4 py-2 text-xs text-[var(--muted)]">
           Devices confirmed offline for over one year can be created as Decommissioned in Reftab, then reviewed before optional NinjaOne removal.

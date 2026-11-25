@@ -71,6 +71,9 @@ export async function reconcileAutomaticOwners(includeLaptops = true) {
 }
 
 export async function reconcileAutomaticOwnersAfterSync(includeLaptops = true) {
+  // External scheduling refreshes both sources and then invokes the policies
+  // once. Manual sync requests should not start a second ownership pass.
+  if (process.env.SYNC_SCHEDULER === "external") return { completed: 0, skipped: 0, failed: 0 };
   try {
     return await reconcileAutomaticOwners(includeLaptops);
   } catch (error) {

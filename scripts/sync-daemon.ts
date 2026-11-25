@@ -101,6 +101,10 @@ async function runSnowflakeSync(reason: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  if (process.env.SYNC_SCHEDULER === "external") {
+    console.info("[sync] External scheduler selected; internal daemon disabled.");
+    return;
+  }
   const startedAt = new Date().toISOString();
   console.info("[sync] Background sync worker started.");
   await markSyncDaemonHeartbeat(startedAt);
