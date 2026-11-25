@@ -28,6 +28,39 @@ after(() => {
   else globalForPrisma.prisma = originalPrisma;
 });
 
+for (const targetOffset of [0, 500]) {
+  test(`House import stops scanning loanees after a usable match at offset ${targetOffset}`, async (t) => {
+    t.mock.method(console, "info", () => {});
+    const offsets: number[] = [];
+    t.mock.method(globalThis, "fetch", async (input: string, init?: RequestInit) => {
+      const url = new URL(input);
+      if (init?.method === "GET" && url.pathname.startsWith("/api/assets/")) {
+        return new Response(null, { status: 404 });
+      }
+      if (url.pathname === "/api/loanees") {
+        const offset = Number(url.searchParams.get("offset"));
+        offsets.push(offset);
+        assert.ok(offset <= targetOffset, "must not request pages after finding IT Help");
+        return Response.json(Array.from({ length: 500 }, (_, i) => ({
+          lnid: offset + i + 1,
+          email: offset === targetOffset && i === 5 ? "ithelp@sevenhills.org" : `person${offset + i}@example.test`,
+        })));
+      }
+      if (url.pathname === "/api/assets") return Response.json({ aid: "HOUSE-PC" });
+      assert.equal(url.pathname, "/api/loans");
+      const body = JSON.parse(String(init?.body));
+      assert.equal(body.lnid, targetOffset + 6);
+      return Response.json({ lid: 789 });
+    });
+    const result = await createAndAssignReftabAsset({
+      assetTag: "HOUSE-PC", categoryId: "456",
+      newOwnerEmployeeId: "ithelp", newOwnerEmail: "ithelp@sevenhills.org",
+    });
+    assert.equal(result.loaneeId, String(targetOffset + 6));
+    assert.deepEqual(offsets, targetOffset === 0 ? [0] : [0, 500]);
+  });
+}
+
 for (const scenario of [
   { name: "serial number", serial: "  5TBF1V3  ", expected: "5TBF1V3", expressCode: "12656608815" },
   { name: "serial number distinct from the asset tag", serial: "SERIAL123", expected: "SERIAL123", expressCode: undefined },

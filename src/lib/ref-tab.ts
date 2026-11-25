@@ -841,7 +841,7 @@ function buildLoaneeMaps(loanees: ReftabLoanee[]): LoaneeMaps {
   return { lnidToEmail, uidToEmail, lnidToLoanee, uidToLoanee };
 }
 
-async function fetchAllReftabLoanees(): Promise<ReftabLoanee[]> {
+async function fetchAllReftabLoanees(stopWhen?: (loanee: ReftabLoanee) => boolean): Promise<ReftabLoanee[]> {
   const limit = 500;
   let offset = 0;
   const out: ReftabLoanee[] = [];
@@ -851,7 +851,9 @@ async function fetchAllReftabLoanees(): Promise<ReftabLoanee[]> {
     const list = listFromResponse(data);
     if (list.length === 0) break;
     for (const item of list) {
-      out.push(loaneeFromApiRecord(item));
+      const loanee = loaneeFromApiRecord(item);
+      out.push(loanee);
+      if (stopWhen?.(loanee)) return out;
     }
     if (list.length < limit) break;
     offset += limit;
@@ -1626,7 +1628,9 @@ function loaneeWithIdFromResponse(data: unknown, user: { employeeId: string; ema
 }
 
 async function findLoaneeForUser(user: { employeeId: string; email: string }): Promise<ReftabLoanee | null> {
-  const loanees = await fetchAllReftabLoanees();
+  // Checkout only needs the first usable match. Inventory syncs still load the
+  // full directory, but imports need not scan thousands of unrelated loanees.
+  const loanees = await fetchAllReftabLoanees((loanee) => loaneeMatches(loanee, user) && Boolean(loaneeCheckoutRef(loanee)));
   const matches = loanees.filter((loanee) => loaneeMatches(loanee, user));
   const selected = matches.find((loanee) => loaneeCheckoutRef(loanee)) ?? matches[0] ?? null;
   console.info("[reftab] /loanees match scan", {

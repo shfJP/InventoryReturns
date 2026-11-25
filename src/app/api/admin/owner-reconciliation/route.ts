@@ -9,6 +9,7 @@ import { reconcileOwner } from "@/lib/reconcile-owner";
 import { addMissingReftabAsset } from "@/lib/missing-reftab-asset";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 const approveSchema = z.object({
   action: z.enum(["reassign-owner", "add-missing-asset", "record-decision"]).default("reassign-owner"),

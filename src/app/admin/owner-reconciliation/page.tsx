@@ -12,6 +12,7 @@ import { decommissionEligibility } from "@/lib/decommission-policy";
 import { HardwareDecommissionPanel, type DecommissionCandidate } from "./hardware-decommission-panel";
 import { HOUSE_NINJA_LOGIN, HOUSE_REFTAB_EMAIL, missingReftabRecipient } from "@/lib/missing-reftab-policy";
 import { HouseDeviceImport } from "./house-device-import";
+import { postReconciliationAction as postJsonWithTimeout, readReconciliationResponse as readResponseJson } from "@/lib/reconciliation-request";
 
 type UserSummary = {
   employeeId: string;
@@ -100,44 +101,8 @@ function deviceLabel(row: { ninjaDevice: OwnerReconciliationRow["ninjaDevice"] }
   return row.ninjaDevice.displayName ?? row.ninjaDevice.systemName ?? row.ninjaDevice.dnsName ?? row.ninjaDevice.netbiosName ?? row.ninjaDevice.id;
 }
 
-async function readResponseJson(res: Response): Promise<Record<string, unknown>> {
-  const text = await res.text();
-  if (!text) return {};
-  try {
-    return JSON.parse(text) as Record<string, unknown>;
-  } catch {
-    const preview = text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 240);
-    throw new Error(`Server returned a non-JSON response (${res.status}). ${preview || "No response body."}`);
-  }
-}
-
 function responseErrorMessage(data: Record<string, unknown>, fallback: string): string {
   return typeof data.error === "string" && data.error.trim() ? data.error : fallback;
-}
-
-async function postJsonWithTimeout(body: Record<string, unknown>) {
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 60_000);
-  try {
-    const res = await fetch("/api/admin/owner-reconciliation", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    const data = await readResponseJson(res).catch((e) => {
-      if (res.ok) throw e;
-      return { error: e instanceof Error ? e.message : "Server returned a non-JSON response" };
-    });
-    return { res, data };
-  } catch (e) {
-    if (e instanceof Error && e.name === "AbortError") {
-      throw new Error("Reftab action timed out after 60 seconds. Check Reftab, then refresh this page.");
-    }
-    throw e;
-  } finally {
-    window.clearTimeout(timeout);
-  }
 }
 
 async function fetchReftabCategories(): Promise<CategoryOption[]> {

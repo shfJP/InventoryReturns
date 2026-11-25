@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { MissingReftabAssetRow } from "@/lib/owner-reconciliation";
 import { HOUSE_NINJA_LOGIN, HOUSE_REFTAB_EMAIL, isHouseNinjaLogin } from "@/lib/missing-reftab-policy";
+import { postReconciliationAction } from "@/lib/reconciliation-request";
 
 type Category = { categoryId: string; name: string };
 
@@ -53,31 +54,16 @@ export function HouseDeviceImport({ rows, disabled, onImported, onAttempt, onBus
     try {
       for (const row of targets) {
         current = row;
-        const controller = new AbortController();
-        const timeout = window.setTimeout(() => controller.abort(), 60_000);
-        try {
-          const response = await fetch("/api/admin/owner-reconciliation", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              action: "add-missing-asset", assetTag: row.assetTag,
-              ninjaDeviceId: row.ninjaDevice.id, categoryId: categoryId || undefined,
-            }),
-            signal: controller.signal,
-          });
-          const data = await response.json().catch(() => {
-            throw new Error("The server response could not be read. Check Reftab and the audit history before retrying.");
-          });
-          if (!response.ok) throw new Error(data.error ?? "Could not create and loan the asset.");
-          setAdded((value) => value + 1);
-          onImported(row.ninjaDevice.id);
-        } finally {
-          window.clearTimeout(timeout);
-        }
+        const { res, data } = await postReconciliationAction({
+          action: "add-missing-asset", assetTag: row.assetTag,
+          ninjaDeviceId: row.ninjaDevice.id, categoryId: categoryId || undefined,
+        });
+        if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "Could not create and loan the asset.");
+        setAdded((value) => value + 1);
+        onImported(row.ninjaDevice.id);
       }
     } catch (cause) {
-      const detail = cause instanceof Error && cause.name === "AbortError"
-        ? "The request timed out. Check Reftab and the audit history before retrying."
-        : cause instanceof Error ? cause.message : "Import failed.";
+      const detail = cause instanceof Error ? cause.message : "Import failed.";
       setError(`Stopped at ${current?.assetTag ?? "device"}: ${detail}`);
     } finally {
       setRunning(false);
@@ -123,7 +109,7 @@ export function HouseDeviceImport({ rows, disabled, onImported, onAttempt, onBus
                 </p>
               </div>
               {attempted && <p role="status" className="text-sm text-[var(--text)]">
-                {added} of {targets.length} devices created and loaned to {HOUSE_REFTAB_EMAIL}.{running ? " Importing..." : ""}
+                {added} of {targets.length} devices created and loaned to {HOUSE_REFTAB_EMAIL}.{running ? " Importing... Each device can take several minutes; keep this page open." : ""}
               </p>}
               {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
             </div>
