@@ -7,8 +7,8 @@ import { invalidateOwnerReconciliationCache } from "./owner-reconciliation-cache
 import { isAutomaticOwnerLaptop } from "./automatic-owner-policy";
 
 export async function reconcileOwner(
-  input: { assetTag: string; ninjaDeviceId: string; requireHouse?: boolean; requireLaptop?: boolean },
-  actor: { actorEmployeeId: string; actorName: string; actorEmail: string | null },
+  input: { assetTag: string; ninjaDeviceId: string; requireHouse?: boolean; requireLaptop?: boolean; expectedRecipientEmail?: string },
+  actor: { actorEmployeeId: string; actorName: string; actorEmail: string | null; jobId?: string },
 ) {
   const row = await getOwnerReconciliationRow(input.assetTag, input.ninjaDeviceId);
   if (!row) throw new Error("No current owner mismatch found for this asset and NinjaOne device.");
@@ -18,6 +18,9 @@ export async function reconcileOwner(
     throw new Error("The computer name no longer ends in -LT; automatic reconciliation stopped.");
   }
   const email = house ? HOUSE_REFTAB_EMAIL : row.ninjaOwner.email;
+  if (input.expectedRecipientEmail && input.expectedRecipientEmail.toLowerCase() !== email.toLowerCase()) {
+    throw new Error("Approved recipient changed. Review the saved action before proceeding.");
+  }
   const owner = house ? await prisma.user.findFirst({
     where: { isActive: true, OR: [
       { email: { equals: email, mode: "insensitive" } },

@@ -128,6 +128,7 @@ model NinjaOneLoginObservation {
 
 model ReconciliationAudit {
   id                      String    @id @default(cuid())
+  jobId                   String?
   action                  String
   status                  String
   assetTag                String
@@ -152,6 +153,7 @@ model ReconciliationAudit {
 
   @@index([createdAt, id])
   @@index([assetTag, createdAt])
+  @@index([jobId])
 }
 
 // Kept independently of synced assignments/devices, including after NinjaOne removal.
@@ -264,6 +266,9 @@ model ReconciliationJob {
   assetTag        String
   ninjaDeviceId   String
   categoryId      String?
+  recipientEmail  String?
+  attempts        Int       @default(0)
+  nextAttemptAt   DateTime?
   actorEmployeeId String
   actorName       String
   actorEmail      String?
@@ -276,6 +281,7 @@ model ReconciliationJob {
   updatedAt       DateTime  @updatedAt
 
   @@index([status, createdAt])
+  @@index([status, nextAttemptAt])
   @@index([assetTag, ninjaDeviceId])
 }
 

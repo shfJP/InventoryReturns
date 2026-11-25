@@ -8,7 +8,7 @@ import { ReftabWriteError } from "./reftab-write-error";
 import { DECOMMISSION_REASON, decommissionAssetNotes, decommissionEligibility } from "./decommission-policy";
 import { invalidateOwnerReconciliationCache } from "./owner-reconciliation-cache";
 
-export type DecommissionActor = { actorEmployeeId: string; actorName: string; actorEmail: string | null };
+export type DecommissionActor = { actorEmployeeId: string; actorName: string; actorEmail: string | null; jobId?: string };
 
 async function invalidateCache() {
   await invalidateOwnerReconciliationCache().catch((error) => console.error("[decommission] Cache invalidation failed", error));
@@ -30,7 +30,8 @@ export async function startHardwareDecommission(
   const id = existing?.id ?? randomUUID();
   const assetNotes = decommissionAssetNotes({ id, ...actor, ninjaDeviceId: row.ninjaDevice.id, lastContact: eligibility.lastContact, at });
   const data = {
-    ...actor, assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id, ninjaUid: live.uid,
+    actorEmployeeId: actor.actorEmployeeId, actorName: actor.actorName, actorEmail: actor.actorEmail,
+    assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id, ninjaUid: live.uid,
     serial: row.serial, model: row.model, title: row.title,
     deviceName: row.ninjaDevice.displayName ?? row.ninjaDevice.systemName ?? row.title ?? row.assetTag,
     lastContact: eligibility.lastContact, categoryId: input.categoryId, assetNotes, status: "CREATING", error: null,

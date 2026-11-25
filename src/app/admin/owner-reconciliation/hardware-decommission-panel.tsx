@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { HardwareDecommission } from "@prisma/client";
 import { DECOMMISSION_REASON } from "@/lib/decommission-policy";
+import { enqueueReconciliationAction } from "@/lib/reconciliation-request";
 import { formatContactTimestamp } from "@/lib/date-time";
 
 export type DecommissionCandidate = {
@@ -46,8 +47,9 @@ export async function requestDecommission(body?: Record<string, unknown>, page =
   }
 }
 
-export function HardwareDecommissionPanel({ candidate, onDismiss, onReserved, onAttempt, refreshKey = 0, disabled = false }: {
+export function HardwareDecommissionPanel({ candidate, onDismiss, onReserved, onAttempt, refreshKey = 0, disabled = false, showList = true }: {
   disabled?: boolean;
+  showList?: boolean;
   refreshKey?: number;
   candidate: DecommissionCandidate | null;
   onDismiss: () => void;
@@ -136,6 +138,14 @@ export function HardwareDecommissionPanel({ candidate, onDismiss, onReserved, on
     setError(null);
     setMessage(null);
     try {
+      if (body.action === "create") {
+        const { res, data } = await enqueueReconciliationAction({ ...body, action: "decommission-missing-asset" });
+        if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "Could not save decision.");
+        onReserved([String(body.ninjaDeviceId)]);
+        onDismiss();
+        setMessage("Decision saved. Follow its progress in Actions & Audit.");
+        return;
+      }
       const data = await requestDecommission(body);
       const record = data.workflow as Workflow;
       setReview(record);
@@ -167,7 +177,7 @@ export function HardwareDecommissionPanel({ candidate, onDismiss, onReserved, on
 
   return (
     <>
-      <section className="overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm">
+      {showList && <section className="overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--table-header-bg)] px-4 py-3">
           <div>
             <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">Hardware decommissions</h2>
@@ -199,7 +209,7 @@ export function HardwareDecommissionPanel({ candidate, onDismiss, onReserved, on
             <button type="button" className="btn-secondary" disabled={loading || busy || page * 25 >= total} onClick={() => setPage((value) => value + 1)}>Next</button>
           </div>
         </div>
-      </section>
+      </section>}
 
       <dialog ref={dialog} aria-labelledby="decommission-title" onCancel={(event) => { event.preventDefault(); close(); }}
         className="max-h-[90vh] w-[calc(100%-2rem)] max-w-2xl overflow-y-auto rounded-lg border border-[var(--border)] bg-white p-0 text-[var(--text)] shadow-xl backdrop:bg-black/40">

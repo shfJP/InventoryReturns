@@ -6,6 +6,7 @@ import { reconcileAutomaticOwners } from "../src/lib/automatic-owner-reconciliat
 import { markSyncStarted, markSyncFinished, markSyncFailed, type SyncSource } from "../src/lib/sync-status";
 import { isSnowflakeConfigured, syncOrganizationReportToSnowflake } from "../src/lib/snowflake";
 import { executeMaintenancePlan, maintenancePlan } from "../src/lib/maintenance-plan";
+import { processNextReconciliationJob } from "../src/lib/reconciliation-jobs";
 import { withMaintenanceLock } from "../src/lib/maintenance-lock";
 
 const mode = process.argv[2] ?? "all";
@@ -69,6 +70,24 @@ async function main() {
       run.error = error instanceof Error ? error.message : String(error);
       throw error;
     } finally {
+      // Use refreshed inventory when sync succeeds, but keep saved decisions
+      // moving even when a sync stage fails. Preserve the original sync error.
+      if (["all", "inventory", "owners", "sync"].includes(mode)) {
+        run.stage = "saved-actions";
+        await save();
+        try {
+          for (let processed = 0; processed < 100; processed++) {
+            if (!await processNextReconciliationJob()) break;
+          }
+        } catch (error) {
+          console.error("[maintenance] Saved action processing failed", error);
+          if (run.state !== "error") {
+            run.state = "error";
+            run.error = error instanceof Error ? error.message : String(error);
+            process.exitCode = 1;
+          }
+        }
+      }
       run.finishedAt = new Date().toISOString();
       await save();
       console.info("[maintenance]", JSON.stringify(run));

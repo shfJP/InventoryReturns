@@ -39,6 +39,7 @@ before(async () => {
       findFirst: async () => users.find((user) => user.email === it.email) ?? null,
     },
     hardwareDecommission: { findMany: async () => [] },
+    reconciliationJob: { findFirst: async () => null },
     equipmentAssignment: {
       findMany: async () => assignments.map((assignment) => ({ ...assignment, user: users.find((user) => user.employeeId === assignment.assignedToEmployeeId) })),
       deleteMany: async ({ where }: RecordData) => {

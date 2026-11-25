@@ -6,6 +6,7 @@ let createAndAssignReftabAsset: typeof import("./ref-tab").createAndAssignReftab
 let reconcileReftabAssetOwner: typeof import("./ref-tab").reconcileReftabAssetOwner;
 let createDecommissionedReftabAsset: typeof import("./ref-tab").createDecommissionedReftabAsset;
 let fetchReftabCategories: typeof import("./ref-tab").fetchReftabCategories;
+let verifyReftabQueuedOwner: typeof import("./ref-tab").verifyReftabQueuedOwner;
 const globalForPrisma = globalThis as unknown as { prisma?: unknown };
 const originalPrisma = globalForPrisma.prisma;
 
@@ -20,13 +21,29 @@ before(async () => {
   process.env.REF_TAB_CREATE_ASSET_LOCATION_ID = "67497";
   process.env.REF_TAB_CREATE_ASSET_SERVICE_TAG_FIELD = "Service Tag";
   process.env.REF_TAB_CREATE_ASSET_EXPRESS_CODE_FIELD = "Express Code";
-  ({ createAndAssignReftabAsset, reconcileReftabAssetOwner, createDecommissionedReftabAsset, fetchReftabCategories } = await import("./ref-tab"));
+  ({ createAndAssignReftabAsset, reconcileReftabAssetOwner, createDecommissionedReftabAsset, fetchReftabCategories, verifyReftabQueuedOwner } = await import("./ref-tab"));
 });
 
 after(() => {
   if (originalPrisma === undefined) delete globalForPrisma.prisma;
   else globalForPrisma.prisma = originalPrisma;
 });
+
+for (const scenario of ["correct", "wrong owner", "no loan", "ambiguous loans", "different asset"]) {
+  test(`queued readback requires exactly one loan for the approved asset and recipient: ${scenario}`, async (t) => {
+    t.mock.method(globalThis, "fetch", async (input: string, init?: RequestInit) => {
+      assert.equal(init?.method ?? "GET", "GET", "verification must never write");
+      const url = new URL(input);
+      if (url.pathname === "/api/loanees") return Response.json([{ lnid: 123, email: scenario === "wrong owner" ? "other@example.test" : "owner@example.test" }]);
+      assert.equal(url.pathname, "/api/loans");
+      const loan = { lid: 789, lnid: 123, aids: [scenario === "different asset" ? "OTHER123" : "FRXN7Y2"], status: "out" };
+      return Response.json(scenario === "no loan" ? [] : scenario === "ambiguous loans" ? [loan, { ...loan, lid: 790 }] : [loan]);
+    });
+    if (scenario === "correct") {
+      assert.equal((await verifyReftabQueuedOwner("FRXN7Y2", "OWNER@example.test")).recipientEmail, "OWNER@example.test");
+    } else await assert.rejects(verifyReftabQueuedOwner("FRXN7Y2", "owner@example.test"), /not confirmed exactly one active loan/);
+  });
+}
 
 for (const targetOffset of [0, 100]) {
   test(`House import stops scanning loanees after a usable match at offset ${targetOffset}`, async (t) => {

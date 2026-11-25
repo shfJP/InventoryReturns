@@ -44,6 +44,7 @@ before(async () => {
       },
     },
     hardwareDecommission: { findMany: async () => [] },
+    reconciliationJob: { findFirst: async () => null },
     equipmentAssignment: {
       findMany: async () => assignments,
       findFirst: async () => assignments[0] ?? null,

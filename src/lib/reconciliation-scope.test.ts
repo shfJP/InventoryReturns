@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { scopeReconciliation } from "./reconciliation-scope";
+import { excludeReservedReconciliation, scopeReconciliation } from "./reconciliation-scope";
 import type { OwnerReconciliationResult, OwnerReconciliationRow, MissingReftabAssetRow } from "./owner-reconciliation";
 
 function owner(id: string, name: string, raw: string) {
@@ -10,6 +10,32 @@ function owner(id: string, name: string, raw: string) {
 function missing(id: string, name: string, raw: string) {
   return owner(id, name, raw) as unknown as MissingReftabAssetRow;
 }
+
+test("saved approvals leave review and all remediation counts without changing the source snapshot", () => {
+  const result = {
+    rows: [owner("saved-owner", "PC", "alice"), owner("open-owner", "PC", "bob")],
+    missingReftabRows: [
+      { ...missing("saved-import", "PC", "unknown"), ownerStatus: "unresolved" },
+      { ...missing("open-import", "PC", "former"), ownerStatus: "inactive" },
+    ],
+    reportItems: [
+      { ninjaDeviceId: "saved-owner", status: "Owner mismatch" },
+      { ninjaDeviceId: "open-owner", status: "Owner mismatch" },
+      { ninjaDeviceId: "saved-import", status: "Missing from Reftab" },
+      { ninjaDeviceId: "open-import", status: "Missing from Reftab" },
+      { ninjaDeviceId: null, status: "Missing from Ninja" },
+    ],
+    summary: { mismatchCount: 2, missingReftabCount: 2, unresolvedNinjaOwnerCount: 1, inactiveNinjaOwnerCount: 1 },
+  } as OwnerReconciliationResult;
+  const filtered = excludeReservedReconciliation(result, new Set(["saved-owner", "saved-import"]));
+  assert.equal(filtered.summary.mismatchCount, 1);
+  assert.equal(filtered.summary.missingReftabCount, 1);
+  assert.equal(filtered.summary.unresolvedNinjaOwnerCount, 0);
+  assert.equal(filtered.summary.inactiveNinjaOwnerCount, 1);
+  assert.equal(filtered.reportItems.length, 3);
+  assert.equal(result.rows.length, 2);
+  assert.equal(result.missingReftabRows.length, 2);
+});
 
 test("manual and automation queues partition eligible policies without losing ordinary laptop imports", () => {
   const result: OwnerReconciliationResult = {

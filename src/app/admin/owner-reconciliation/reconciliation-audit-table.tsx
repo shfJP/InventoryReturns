@@ -12,6 +12,9 @@ const actions: Record<string, string> = {
   "decommission-missing-asset": "Create Decommissioned asset", "verify-decommission": "Verify Reftab decommission",
   "confirm-decommission-keep": "Confirm / keep in NinjaOne", "decommission-ninja-device": "Decommission in NinjaOne",
   "verify-ninja-decommission": "Verify NinjaOne decommission",
+  "queue-action": "Decision saved", "queued-attempt": "Background execution attempt",
+  "verify-queued-action": "Verified saved action", "retry-queued-action": "Retry requested",
+  "cancel-queued-action": "Returned to review", "recover-queued-action": "Recovered interrupted action",
 };
 const statuses: Record<string, string> = {
   SUCCEEDED: "Completed", FAILED: "Failed", PENDING: "Pending / incomplete", REVIEW_REQUIRED: "Review required", RECORDED: "Historical decision",
@@ -25,7 +28,7 @@ function savedEvidence(json: string | null): OwnerLoginEvidence | null {
   } catch { return null; }
 }
 
-export function ReconciliationAuditTable({ refreshKey, automated = false }: { refreshKey: number; automated?: boolean }) {
+export function ReconciliationAuditTable({ refreshKey, automated = false, jobId }: { refreshKey: number; automated?: boolean; jobId?: string }) {
   const [rows, setRows] = useState<AuditEntry[]>([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -45,6 +48,7 @@ export function ReconciliationAuditTable({ refreshKey, automated = false }: { re
     void (async () => {
       try {
         const params = new URLSearchParams({ audit: "1", page: String(page), q: search });
+        if (jobId) params.set("jobId", jobId);
         if (automated) params.set("view", "automated");
         const response = await fetch(`/api/admin/owner-reconciliation?${params}`, { signal: controller.signal });
         const body = await response.json();
@@ -60,7 +64,7 @@ export function ReconciliationAuditTable({ refreshKey, automated = false }: { re
       }
     })();
     return () => controller.abort();
-  }, [page, search, refreshKey, reload, automated]);
+  }, [page, search, refreshKey, reload, automated, jobId]);
   const pages = Math.max(1, Math.ceil(total / 25));
   return (
     <section className="overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm">
@@ -88,7 +92,9 @@ export function ReconciliationAuditTable({ refreshKey, automated = false }: { re
               <td className="table-cell">
                 <div>{formatContactTimestamp(row.createdAt, "-")}</div>
                 <div className="text-xs text-[var(--muted)]">{row.actorName} ({row.actorEmployeeId})</div>
-                <div className="text-xs font-medium">{row.actorEmployeeId.startsWith("system:") ? "Automation" : "Manual · signed-in user"}</div>
+                <div className="text-xs font-medium">{row.actorEmployeeId.startsWith("system:") ? "Automation"
+                  : row.jobId && !["queue-action", "retry-queued-action", "cancel-queued-action"].includes(row.action)
+                    ? "Staff approval · background execution" : "Manual · signed-in user"}</div>
               </td>
               <td className="table-cell">
                 <div className="font-medium">{row.assetTag}</div>
@@ -114,6 +120,7 @@ export function ReconciliationAuditTable({ refreshKey, automated = false }: { re
                 {evidence && <details><summary className="cursor-pointer text-[var(--accent)]">Login evidence at review</summary><OwnerEvidence evidence={evidence} /></details>}
                 <details><summary className="cursor-pointer text-[var(--muted)]">Audit reference</summary>
                   <p>{row.id}</p>
+                  {row.jobId && <p>Saved action: {row.jobId}</p>}
                   <p>Completed: {formatContactTimestamp(row.completedAt, "Not recorded")}</p>
                 </details>
               </td>

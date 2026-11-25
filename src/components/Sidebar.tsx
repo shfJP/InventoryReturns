@@ -131,6 +131,9 @@ export default function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: 
               <SidebarLink href="/admin/automated-reconciliation" label="Automated Reconciliation"
                 active={pathname === "/admin/automated-reconciliation"} onClose={onClose}
                 icon={<ReconcileIcon className="h-5 w-5 shrink-0" />} roomy />
+              <SidebarLink href="/admin/reconciliation-actions" label="Actions & Audit"
+                active={pathname === "/admin/reconciliation-actions"} onClose={onClose}
+                icon={<ReconcileIcon className="h-5 w-5 shrink-0" />} roomy />
               <SidebarLink href="/admin/no-owner-signal" label="No Owner Signal"
                 active={pathname === "/admin/no-owner-signal"} onClose={onClose}
                 icon={<ReconcileIcon className="h-5 w-5 shrink-0" />} roomy />

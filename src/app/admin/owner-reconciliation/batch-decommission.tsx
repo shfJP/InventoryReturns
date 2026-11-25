@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import type { MissingReftabAssetRow } from "@/lib/owner-reconciliation";
 import { decommissionEligibility } from "@/lib/decommission-policy";
 import { runReconciliationBatch } from "@/lib/reconciliation-batch";
-import { requestDecommission } from "./hardware-decommission-panel";
+import { enqueueReconciliationAction } from "@/lib/reconciliation-request";
 
 type Category = { categoryId: string; name: string };
 
@@ -58,29 +58,18 @@ export function BatchDecommission({ rows, disabled, acquire, release, onBusyChan
     try {
       await runReconciliationBatch(targets, async (row) => {
         setCurrent(row.assetTag);
-        try {
-          const data = await requestDecommission({
-            action: "create", ninjaDeviceId: row.ninjaDevice.id, assetTag: row.assetTag, categoryId: category,
-          });
-          if (data.workflow?.status !== "AWAITING_CONFIRMATION") {
-            if (data.workflow && data.workflow.status !== "FAILED") onReserved([row.ninjaDevice.id]);
-            throw new Error("This device has an existing or incomplete decommission. Review its saved status before continuing.");
-          }
-        } catch (cause) {
-          // Recover reservations after timeouts without repeating an external write.
-          try {
-            const saved = await requestDecommission({ action: "status", ninjaDeviceId: row.ninjaDevice.id });
-            if (saved.workflow && saved.workflow.status !== "FAILED") onReserved([row.ninjaDevice.id]);
-          } catch { /* Preserve the original error and stop the batch. */ }
-          throw cause;
-        }
+        const { res, data } = await enqueueReconciliationAction({
+          action: "decommission-missing-asset", ninjaDeviceId: row.ninjaDevice.id,
+          assetTag: row.assetTag, categoryId: category,
+        });
+        if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "Could not save decision.");
       }, (row) => {
         setCompleted((value) => value + 1);
         onReserved([row.ninjaDevice.id]);
-        onResult(row.assetTag, "Created as Decommissioned in Reftab. Awaiting visual confirmation before optional NinjaOne removal.");
+        onResult(row.assetTag, "Decision saved. Track Reftab creation and subsequent visual confirmation in Actions & Audit.");
       }, (row, cause) => {
         const detail = cause instanceof Error ? cause.message : "Decommission failed.";
-        setError(`Stopped at ${row.assetTag}: ${detail} Check Hardware decommissions and Reftab before retrying. Remaining devices were not processed.`);
+        setError(`Stopped at ${row.assetTag}: ${detail} Check Actions & Audit and Reftab before retrying. Remaining devices were not processed.`);
         onResult(row.assetTag, detail, true);
       });
     } finally {
@@ -105,7 +94,7 @@ export function BatchDecommission({ rows, disabled, acquire, release, onBusyChan
       <div role="dialog" aria-modal="true" aria-labelledby="batch-decommission-title" className="max-h-[90vh] w-full max-w-xl space-y-4 overflow-y-auto rounded-lg bg-white p-5 shadow-xl">
         <h2 id="batch-decommission-title" className="text-lg font-semibold">Decommission {targets.length} selected device(s)</h2>
         <p className="text-sm">Create unassigned assets in Reftab with Decommissioned status. Each device must be confirmed offline for over one year; eligibility is checked again in NinjaOne before creation.</p>
-        <p className="text-sm">Your signed-in identity and inactivity reason are recorded for each device. Review each saved item under Hardware decommissions and visually confirm it in Reftab before optional NinjaOne removal.</p>
+        <p className="text-sm">Your signed-in identity and inactivity reason are recorded for each device. Review each saved item under Actions & Audit and visually confirm it in Reftab before optional NinjaOne removal.</p>
         <p className="text-sm">Only eligible selected devices are included. Choose a category for this batch.</p>
         <ul className="max-h-40 overflow-y-auto text-sm">{targets.map((row) => <li key={row.id}>{row.assetTag} · {row.title ?? row.ninjaDevice.systemName ?? row.ninjaDevice.id}</li>)}</ul>
         <label className="block text-sm">Reftab category
@@ -115,8 +104,8 @@ export function BatchDecommission({ rows, disabled, acquire, release, onBusyChan
           </select>
         </label>
         {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
-        <p role="status" className="text-sm">{completed} of {targets.length} created{current ? ` · Processing ${current}. Keep this page open.` : ""}</p>
-        {started.current && !running && <p className="text-sm">Review saved results under Hardware decommissions.</p>}
+        <p role="status" className="text-sm">{completed} of {targets.length} queued{current ? ` · Processing ${current}. Saving decisions.` : ""}</p>
+        {started.current && !running && <p className="text-sm">Review saved results under Actions & Audit.</p>}
         <div className="flex justify-end gap-3">
           <button className="btn-secondary" disabled={running || loading} onClick={close}>Close</button>
           <button className="btn-primary" disabled={loading || !category || started.current} onClick={() => void start()}>{running ? "Processing..." : "Create Decommissioned assets"}</button>

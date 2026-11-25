@@ -1,6 +1,21 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { postReconciliationAction } from "./reconciliation-request";
+import { enqueueReconciliationAction, postReconciliationAction } from "./reconciliation-request";
+
+test("saving a decision returns immediately without polling or repeating the POST", async (t) => {
+  const request = t.mock.method(globalThis, "fetch", async () =>
+    Response.json({ jobId: "saved-1", status: "QUEUED" }, { status: 202 }));
+  const { res, data } = await enqueueReconciliationAction({ action: "reassign-owner" });
+  assert.equal(res.status, 202);
+  assert.equal(data.jobId, "saved-1");
+  assert.equal(request.mock.callCount(), 1);
+});
+
+test("an uncertain save directs staff to the queue without resubmitting", async (t) => {
+  const request = t.mock.method(globalThis, "fetch", async () => { throw new Error("Connection lost"); });
+  await assert.rejects(enqueueReconciliationAction({ action: "reassign-owner" }), /Check Actions & Audit before resubmitting/);
+  assert.equal(request.mock.callCount(), 1);
+});
 
 test("a slow import can succeed after the old sixty-second deadline", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });

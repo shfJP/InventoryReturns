@@ -39,3 +39,19 @@ export function scopeReconciliation(result: OwnerReconciliationResult, view: boo
     },
   };
 }
+
+export function excludeReservedReconciliation(result: OwnerReconciliationResult, deviceIds: Set<string>) {
+  const rows = result.rows.filter((row) => !deviceIds.has(row.ninjaDevice.id));
+  const missingReftabRows = result.missingReftabRows.filter((row) => !deviceIds.has(row.ninjaDevice.id));
+  const reportItems = result.reportItems.filter((row) => !row.ninjaDeviceId || !deviceIds.has(row.ninjaDeviceId));
+  const countOwners = (status: MissingReftabAssetRow["ownerStatus"], reportStatus: string) => new Set([
+    ...reportItems.filter((item) => item.status === reportStatus).map((item) => item.ninjaDeviceId),
+    ...missingReftabRows.filter((row) => row.ownerStatus === status).map((row) => row.ninjaDevice.id),
+  ]).size;
+  return { ...result, rows, missingReftabRows, reportItems, summary: {
+    ...result.summary, mismatchCount: rows.length, missingReftabCount: missingReftabRows.length,
+    missingNinjaOwnerCount: countOwners("missing", "No owner signal"),
+    unresolvedNinjaOwnerCount: countOwners("unresolved", "Owner not in directory"),
+    inactiveNinjaOwnerCount: countOwners("inactive", "Inactive owner"),
+  } };
+}

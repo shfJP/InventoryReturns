@@ -3,6 +3,7 @@ import { getOwnerReconciliationResult } from "./owner-reconciliation";
 import { isHouseNinjaLogin } from "./missing-reftab-policy";
 import { reconcileOwner } from "./reconcile-owner";
 import { addMissingReftabAsset } from "./missing-reftab-asset";
+import { outstandingJobStatuses } from "./reconciliation-jobs";
 import { isAutomaticOwnerLaptop } from "./automatic-owner-policy";
 
 const actor = {
@@ -40,6 +41,11 @@ export async function reconcileAutomaticOwners(includeLaptops = true) {
           SELECT pg_try_advisory_xact_lock(hashtext('house-reconciliation'), hashtext(${candidate.ninjaDeviceId})) AS acquired
         `;
         if (!lease.acquired) { skipped++; return; }
+        const reserved = await prisma.reconciliationJob.findFirst({ where: {
+          OR: [{ ninjaDeviceId: candidate.ninjaDeviceId }, { assetTag: candidate.assetTag }],
+          status: { in: outstandingJobStatuses },
+        }, select: { id: true } });
+        if (reserved) { skipped++; return; }
         const unfinished = await prisma.reconciliationAudit.findFirst({
           where: {
             assetTag: candidate.assetTag,

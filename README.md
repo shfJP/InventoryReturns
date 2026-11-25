@@ -29,21 +29,43 @@ routes.
 
 **Docker:** Yes. The `Dockerfile` builds a standalone image and runs `sh start.sh`. Use **PostgreSQL** (`DATABASE_URL=postgresql://...`). The startup script runs `prisma db push` when the DB is available.
 
-Owner changes and missing-asset imports run through a durable `ReconciliationJob`
-queue. `start.sh` starts its independent worker before the sync daemon, so slow
-syncs do not delay manual actions. For local development or a custom startup,
-run `npm run db:prepare` and `npm run worker:reconciliation` alongside the web
-server. The API checks the worker heartbeat before accepting new work. The page
-polls job status using short requests to avoid Cloudflare's request timeout and
-shows recent actions after a reload. Leaving the page does not cancel an action;
-a bulk selection queues its next device only while the page remains open.
+Owner changes, missing-asset imports, and decommission creation use a durable
+`ReconciliationJob` queue. Saving an approval returns immediately, even when
+the worker or Reftab is unavailable. Accepted items leave Ownership Review and
+its remediation counts and appear under **Actions & Audit**
+(`/admin/reconciliation-actions`). Failed and held approvals stay there until
+completed or explicitly returned to review. The original approver and intended
+recipient remain attached to every background attempt; a changed recipient
+blocks execution instead of redirecting the approval.
 
-Interrupted writes and existing pending/review-required Reftab audits block
-retries. They require checking the actual Reftab asset and loan, syncing, and
-an administrator resolving the audit/job in the database after verification.
-Do not mark an attempt successful without confirming its external and local
-outcomes. Old pending audits are not automatically converted or replayed.
-If an import cannot infer a category, select one in the import dialog or set
+`start.sh` starts the independent worker before the sync daemon. For custom
+startup/local development, run `npm run db:prepare` and
+`npm run worker:reconciliation` alongside the web server. The schema additions
+are applied by the normal startup database preparation. Coolify maintenance
+in `all`, `inventory`, `owners`, or `sync` mode also processes up to 100 saved
+actions after attempting sync, including when a sync stage fails. Safe failures
+retry after five minutes with exponential backoff capped at 24 hours. Fix the
+reported credentials, sync, or category issue; no new approval is needed.
+Actions & Audit also provides **Retry now** and **Set category & retry**.
+
+The queue list refreshes every five seconds and audit/decommission history
+every ten seconds. Leaving the page does not cancel saved decisions. Keep a
+bulk submission page open until all decisions have been saved; execution then
+continues in the background. Audit entries distinguish staff approval,
+background execution, and automatic policy actions. Saving an approval alone
+does not count as a completed reconciliation in the Excel report.
+
+Interrupted or uncertain external writes are held and checked against Reftab
+every 30 minutes. Readback requires exactly one active loan for the approved
+asset and recipient, then refreshes local ownership before marking completion.
+An interrupted job is automatically requeued only when no external-write audit
+was started and no uncertain external write exists for the asset. Partially
+applied or ambiguous outcomes remain held for investigation, rather than
+replaying writes. Historical jobs without a saved recipient cannot be retried
+without a new approval. Decommission creation still requires visual confirmation
+before optional removal from NinjaOne.
+
+If an import cannot infer a category, set it on the failed saved action or set
 `REF_TAB_CREATE_ASSET_CATEGORY_ID` / the device-type category defaults.
 
 ### Coolify / production: env vars for pilot auth and “Mark collected”

@@ -63,3 +63,20 @@ export async function postReconciliationAction(body: Record<string, unknown>) {
     clearTimeout(timeout);
   }
 }
+
+// Return as soon as the server has durably saved the decision.
+export async function enqueueReconciliationAction(body: Record<string, unknown>) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const res = await fetch("/api/admin/owner-reconciliation", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body), signal: controller.signal,
+    });
+    const data = await readReconciliationResponse(res);
+    if (res.status === 202 && typeof data.jobId !== "string") throw new Error("Missing saved action reference.");
+    return { res, data };
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : "Could not receive the response."} Check Actions & Audit before resubmitting; the decision may already be saved.`);
+  } finally { clearTimeout(timeout); }
+}

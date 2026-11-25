@@ -7,15 +7,14 @@ import { isLoggedIn } from "@/lib/auth-session";
 import { formatContactTimestamp } from "@/lib/date-time";
 import type { OwnerLoginEvidence } from "@/lib/ninja-login-evidence";
 import { OwnerEvidence } from "./owner-evidence";
-import { ReconciliationAuditTable } from "./reconciliation-audit-table";
+
 import { decommissionEligibility } from "@/lib/decommission-policy";
 import { HardwareDecommissionPanel, type DecommissionCandidate } from "./hardware-decommission-panel";
 import { BatchDecommission } from "./batch-decommission";
 import { HOUSE_REFTAB_EMAIL, missingReftabRecipient } from "@/lib/missing-reftab-policy";
 import { HouseDeviceImport } from "./house-device-import";
-import { postReconciliationAction as postJsonWithTimeout, readReconciliationResponse as readResponseJson } from "@/lib/reconciliation-request";
+import { enqueueReconciliationAction as postJsonWithTimeout, readReconciliationResponse as readResponseJson } from "@/lib/reconciliation-request";
 import { runReconciliationBatch } from "@/lib/reconciliation-batch";
-import { BackgroundActions } from "./background-actions";
 
 type UserSummary = {
   employeeId: string;
@@ -139,6 +138,8 @@ export default function OwnerReconciliationPage() {
   const [query, setQuery] = useState("");
   const [summary, setSummary] = useState<ApiResponse["summary"] | null>(null);
   const [missingReftabRows, setMissingReftabRows] = useState<MissingReftabAssetRow[]>([]);
+  const missingRowsRef = useRef(missingReftabRows);
+  missingRowsRef.current = missingReftabRows;
   const [categoryModalRow, setCategoryModalRow] = useState<MissingReftabAssetRow | null>(null);
   const [categories, setCategories] = useState<CategoryOption[]>([]);
   const [categoryLoading, setCategoryLoading] = useState(false);
@@ -162,19 +163,21 @@ export default function OwnerReconciliationPage() {
     });
     setSummary((previous) => previous ? {
       ...previous,
-      equipmentCount: previous.equipmentCount + 1,
-      matchedDeviceCount: previous.matchedDeviceCount + 1,
-      alreadyMatchedOwnerCount: previous.alreadyMatchedOwnerCount + 1,
       missingReftabCount: Math.max(0, previous.missingReftabCount - 1),
     } : previous);
   }, []);
   const reserveDecommissions = useCallback((deviceIds: string[]) => {
+    const removedCount = missingRowsRef.current.filter((row) => deviceIds.includes(row.ninjaDevice.id)).length;
+    missingRowsRef.current = missingRowsRef.current.filter((row) => !deviceIds.includes(row.ninjaDevice.id));
     setMissingReftabRows((previous) => previous.filter((row) => !deviceIds.includes(row.ninjaDevice.id)));
     setSelectedMissing((previous) => {
       const next = new Set(previous);
       for (const id of deviceIds) next.delete(id);
       return next;
     });
+    setSummary((previous) => previous ? {
+      ...previous, missingReftabCount: Math.max(0, previous.missingReftabCount - removedCount),
+    } : previous);
   }, []);
 
   async function exportReport() {
@@ -292,6 +295,30 @@ export default function OwnerReconciliationPage() {
   const selectableMissingRows = filteredMissingRows.filter((row) =>
     missingReftabRecipient(row) || decommissionEligibility(row.ninjaDevice).eligible);
   const busy = houseImportBusy || approvingId !== null;
+  useEffect(() => {
+    if (busy || loading) return;
+    const controller = new AbortController();
+    let active = false;
+    const timer = setInterval(async () => {
+      if (active || document.hidden) return;
+      active = true;
+      try {
+        const response = await fetch("/api/admin/owner-reconciliation", { cache: "no-store", signal: controller.signal });
+        if (!response.ok) return;
+        const data = await response.json() as ApiResponse;
+        if (controller.signal.aborted) return;
+        setRows(data.rows);
+        setMissingReftabRows(data.missingReftabRows);
+        setSummary(data.summary);
+        setCache(data.cache ?? null);
+        setSelected((previous) => new Set([...previous].filter((id) => data.rows.some((row) => row.id === id))));
+        setSelectedMissing((previous) => new Set([...previous].filter((id) => data.missingReftabRows.some((row) => row.ninjaDevice.id === id))));
+      } catch {
+        // A background refresh must not interrupt an active review.
+      } finally { active = false; }
+    }, 10_000);
+    return () => { controller.abort(); clearInterval(timer); };
+  }, [busy, loading]);
   const blocked = busy || categoryModalRow !== null || decommissionCandidate !== null;
   function acquireAction() {
     if (actionLock.current) return false;
@@ -326,7 +353,7 @@ export default function OwnerReconciliationPage() {
     try {
       const outcome = await runReconciliationBatch(targets, async (row) => {
         setApprovingId(row.id);
-        setProgress(`Processing ${completed + 1} of ${targets.length}: ${row.assetTag}. Keep this page open.`);
+        setProgress(`Processing ${completed + 1} of ${targets.length}: ${row.assetTag}. Saving decisions; execution continues in the background.`);
         const { res, data } = await postJsonWithTimeout({
           action: decision ? "record-decision" : "reassign-owner",
           assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id,
@@ -339,15 +366,14 @@ export default function OwnerReconciliationPage() {
         setSelected((previous) => { const next = new Set(previous); next.delete(row.id); return next; });
         setSummary((previous) => previous ? {
           ...previous, mismatchCount: Math.max(0, previous.mismatchCount - 1),
-          alreadyMatchedOwnerCount: previous.alreadyMatchedOwnerCount + (decision ? 0 : 1),
         } : previous);
-        reportResult(row.assetTag, decision === "DEFER" ? "Review deferred." : decision ? "Sent to the inventory correction queue." : `Reftab owner updated to ${missingReftabRecipient(row)?.email ?? row.ninjaOwner.email}.`);
+        reportResult(row.assetTag, decision === "DEFER" ? "Review deferred." : decision ? "Sent to the inventory correction queue." : `Decision saved: queue owner change to ${missingReftabRecipient(row)?.email ?? row.ninjaOwner.email}.`);
       }, (row, cause) => {
         const detail = cause instanceof Error ? cause.message : "Action failed";
         reportResult(row.assetTag, detail, true);
         setError(`Stopped at ${row.assetTag}: ${detail} Check the audit history and Reftab before retrying. Remaining items were not processed.`);
       });
-      setMessage(`${outcome.completed} of ${targets.length} item(s) completed.${outcome.stopped ? " Batch stopped; review the failed item before retrying." : ""}`);
+      setMessage(`${outcome.completed} of ${targets.length} decision(s) saved. Track execution in Actions & Audit.${outcome.stopped ? " Batch stopped; review the failed item before retrying." : ""}`);
     } finally {
       setProgress(null);
       releaseAction();
@@ -365,7 +391,7 @@ export default function OwnerReconciliationPage() {
     if (!recipient || houseImportBusy || !acquireAction()) return;
 
     setApprovingId(row.id);
-    setProgress(`Adding ${row.assetTag} to Reftab. Keep this page open.`);
+    setProgress(`Saving decision for ${row.assetTag}.`);
     setError(null);
     setCategoryError(null);
     setMessage(null);
@@ -378,8 +404,8 @@ export default function OwnerReconciliationPage() {
       });
       if (!res.ok) throw new Error(responseErrorMessage(data, "Failed to add Reftab asset"));
       missingAssetImported(row.ninjaDevice.id);
-      setMessage(`${row.assetTag} added to Reftab and loaned to ${recipient.email}.`);
-      reportResult(row.assetTag, `Created in Reftab and loaned to ${recipient.email}.`);
+      setMessage(`${row.assetTag}: decision saved. Track the assignment to ${recipient.email} in Actions & Audit.`);
+      reportResult(row.assetTag, `Queued creation and assignment to ${recipient.email}.`);
       setCategoryModalRow(null);
       setSelectedCategoryId("");
     } catch (e) {
@@ -460,7 +486,7 @@ export default function OwnerReconciliationPage() {
         </div>
       </div>
 
-      <BackgroundActions />
+      <a href="/admin/reconciliation-actions" className="btn-secondary">View saved decisions in Actions &amp; Audit</a>
       {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">{error}</div>}
       {message && <div role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-emerald-800">{message}</div>}
       {(progress || results.length > 0) && (
@@ -733,9 +759,9 @@ export default function OwnerReconciliationPage() {
         )}
       </section>
 
-      <HardwareDecommissionPanel candidate={decommissionCandidate} onDismiss={dismissDecommission}
+      <HardwareDecommissionPanel showList={false} candidate={decommissionCandidate} onDismiss={dismissDecommission}
         onReserved={reserveDecommissions} onAttempt={refreshAudit} refreshKey={auditRefresh} disabled={busy} />
-      <ReconciliationAuditTable refreshKey={auditRefresh} />
+      <a href="/admin/reconciliation-actions" className="text-[var(--accent)] underline">View saved actions, retries, and audit history in Actions &amp; Audit</a>
 
       {categoryModalRow && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">

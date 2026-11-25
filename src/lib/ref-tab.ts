@@ -1798,6 +1798,29 @@ export async function reconcileReftabAssetOwner(input: ReftabOwnerReconciliation
   return { loanId: currentLoan.loanId, loaneeId: checkoutRef.value };
 }
 
+// Read back the exact asset and loanee before resolving an uncertain queued write.
+// A missing loan or an ambiguous/missing email is never treated as success.
+export async function verifyReftabQueuedOwner(assetTag: string, email: string) {
+  const maps = buildLoaneeMaps(await fetchAllReftabLoanees());
+  const matches: Record<string, unknown>[] = [];
+  for (let offset = 0; offset < 500_000; offset += ASSETS_LIMIT) {
+    const loans = listFromResponse(await fetchReftabJson(
+      `loans?limit=${ASSETS_LIMIT}&offset=${offset}&status=out`, `Verify Reftab loans offset ${offset}`));
+    for (const loan of loans) {
+      if (!isCurrentLoanRecord(loan)) continue;
+      const assignee = getLoanAssignee(loan, maps) || "current-loanee";
+      if (assignmentsFromLoan(loan, assignee, combineManagerInfo(managerInfoFromLoanee(loaneeFromRecord(loan, maps)), managerInfoFromRecord(loan))).some((item) => sameReftabAsset(item, { assetTag }))) matches.push(loan);
+    }
+    if (loans.length < ASSETS_LIMIT) {
+      if (matches.length !== 1 || normalizeKey(loaneeFromRecord(matches[0], maps)?.email) !== normalizeKey(email)) {
+        throw new Error("Reftab has not confirmed exactly one active loan to the approved recipient. The action remains held for review.");
+      }
+      return { assetTag, recipientEmail: email, verifiedAt: new Date().toISOString() };
+    }
+  }
+  throw new Error("Reftab verification exceeded the loan scan limit.");
+}
+
 export type ReftabCreateInput = {
   assetTag: string;
   serial?: string | null;

@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getAccessProfile } from "@/lib/access-control";
-import { confirmHardwareDecommission, startHardwareDecommission, verifyHardwareDecommission } from "@/lib/hardware-decommission";
+import { confirmHardwareDecommission, verifyHardwareDecommission } from "@/lib/hardware-decommission";
+import { enqueueReconciliation } from "@/lib/reconciliation-jobs";
 import { canDecommissionNinjaOne } from "@/lib/ninjaone";
 
 export const dynamic = "force-dynamic";
@@ -46,9 +47,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ workflow });
     }
     if (input.action === "verify") return NextResponse.json({ ok: true, ...await verifyHardwareDecommission(input.id, actor) });
-    const workflow = input.action === "create"
-      ? await startHardwareDecommission(input, actor)
-      : await confirmHardwareDecommission(input, actor);
+    if (input.action === "create") {
+      const job = await enqueueReconciliation({ ...input, action: "decommission-missing-asset" }, actor);
+      return NextResponse.json({ jobId: job.id, status: job.status }, { status: 202 });
+    }
+    const workflow = await confirmHardwareDecommission(input, actor);
     return NextResponse.json({ ok: true, workflow });
   } catch (error) {
     console.error("[hardware-decommission] Action failed", error);

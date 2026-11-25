@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import type { MissingReftabAssetRow } from "@/lib/owner-reconciliation";
 import { HOUSE_NINJA_LOGIN, HOUSE_REFTAB_EMAIL, isHouseNinjaLogin, missingReftabRecipient } from "@/lib/missing-reftab-policy";
-import { postReconciliationAction } from "@/lib/reconciliation-request";
+import { enqueueReconciliationAction } from "@/lib/reconciliation-request";
 import { runReconciliationBatch } from "@/lib/reconciliation-batch";
 
 type Category = { categoryId: string; name: string };
@@ -62,7 +62,7 @@ export function HouseDeviceImport({ rows, disabled, onImported, onAttempt, onBus
     setError(null);
     try {
       await runReconciliationBatch(targets, async (row) => {
-        const { res, data } = await postReconciliationAction({
+        const { res, data } = await enqueueReconciliationAction({
           action: "add-missing-asset", assetTag: row.assetTag,
           ninjaDeviceId: row.ninjaDevice.id, categoryId: categoryId || undefined,
         });
@@ -70,7 +70,7 @@ export function HouseDeviceImport({ rows, disabled, onImported, onAttempt, onBus
       }, (row) => {
         setAdded((value) => value + 1);
         onImported(row.ninjaDevice.id);
-        onResult(row.assetTag, `Created in Reftab and loaned to ${missingReftabRecipient(row)?.email}.`);
+        onResult(row.assetTag, `Decision saved: create and assign to ${missingReftabRecipient(row)?.email}.`);
       }, (row, cause) => {
         const detail = cause instanceof Error ? cause.message : "Import failed.";
         setError(`Stopped at ${row.assetTag}: ${detail} Check audit history and Reftab before retrying. Remaining devices were not processed.`);
@@ -125,7 +125,7 @@ export function HouseDeviceImport({ rows, disabled, onImported, onAttempt, onBus
                 </p>
               </div>
               {attempted && <p role="status" className="text-sm text-[var(--text)]">
-                {added} of {targets.length} devices created and loaned to their listed recipients.{running ? " Importing... Each device can take several minutes; keep this page open." : ""}
+                {added} of {targets.length} decisions saved. Creating and assigning assets continues in the background.{running ? " Keep this page open while the remaining decisions are saved." : " Track results in Actions & Audit."}
               </p>}
               {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
             </div>

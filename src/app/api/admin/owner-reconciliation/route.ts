@@ -5,14 +5,14 @@ import { getOwnerReconciliationRow } from "@/lib/owner-reconciliation";
 import { fetchReftabCategories } from "@/lib/ref-tab";
 import { getCachedOwnerReconciliationResult, invalidateOwnerReconciliationCache } from "@/lib/owner-reconciliation-cache";
 import { getAccessProfile } from "@/lib/access-control";
-import { enqueueReconciliation } from "@/lib/reconciliation-jobs";
-import { scopeReconciliation } from "@/lib/reconciliation-scope";
+import { enqueueReconciliation, outstandingJobStatuses } from "@/lib/reconciliation-jobs";
+import { scopeReconciliation, excludeReservedReconciliation } from "@/lib/reconciliation-scope";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 const approveSchema = z.object({
-  action: z.enum(["reassign-owner", "add-missing-asset", "record-decision"]).default("reassign-owner"),
+  action: z.enum(["reassign-owner", "add-missing-asset", "decommission-missing-asset", "record-decision"]).default("reassign-owner"),
   assetTag: z.string().min(1),
   ninjaDeviceId: z.string().min(1),
   serial: z.string().nullable().optional(),
@@ -42,11 +42,18 @@ export async function GET(req: NextRequest) {
         error: job.error }, { headers: { "Cache-Control": "no-store" } });
     }
     if (req.nextUrl.searchParams.get("jobs") === "1") {
-      const jobs = await prisma.reconciliationJob.findMany({
-        orderBy: { createdAt: "desc" }, take: 25,
-        select: { id: true, assetTag: true, action: true, status: true, error: true, createdAt: true },
-      });
-      return NextResponse.json({ jobs }, { headers: { "Cache-Control": "no-store" } });
+      const page = Math.max(1, Math.min(10_000, Number(req.nextUrl.searchParams.get("page")) || 1));
+      if (!Number.isInteger(page)) return NextResponse.json({ error: "Invalid page" }, { status: 400 });
+      const q = (req.nextUrl.searchParams.get("q") ?? "").trim().slice(0, 200);
+      const where = q ? { OR: ["assetTag", "ninjaDeviceId", "actorName", "recipientEmail"].map((field) =>
+        ({ [field]: { contains: q, mode: "insensitive" as const } })) } : {};
+      const [jobs, total, heartbeat] = await Promise.all([
+        prisma.reconciliationJob.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: (page - 1) * 25, take: 25 }),
+        prisma.reconciliationJob.count({ where }),
+        prisma.appSetting.findUnique({ where: { key: "reconciliation-worker-heartbeat" } }),
+      ]);
+      return NextResponse.json({ jobs, total, workerOnline: Boolean(heartbeat && Date.now() - Number(heartbeat.value) < 60_000) },
+        { headers: { "Cache-Control": "no-store" } });
     }
     if (req.nextUrl.searchParams.get("audit") === "1") {
       const page = Number(req.nextUrl.searchParams.get("page") ?? "1");
@@ -62,6 +69,7 @@ export async function GET(req: NextRequest) {
       } : {};
       const where = {
         ...searchWhere,
+        ...(req.nextUrl.searchParams.get("jobId") ? { jobId: req.nextUrl.searchParams.get("jobId")! } : {}),
         ...(req.nextUrl.searchParams.get("view") === "automated"
           ? { actorEmployeeId: { startsWith: "system:" } } : {}),
       };
@@ -80,7 +88,14 @@ export async function GET(req: NextRequest) {
 
     const cached = await getCachedOwnerReconciliationResult(req.nextUrl.searchParams.get("refresh") === "1");
     const automated = req.nextUrl.searchParams.get("view") === "automated";
-    const scoped = scopeReconciliation(cached.result, req.nextUrl.searchParams.get("view") === "no-owner-signal" ? "no-owner-signal" : automated);
+    const reservations = await prisma.reconciliationJob.findMany({ where: { OR: [
+      { status: { in: outstandingJobStatuses } },
+      { status: "SUCCEEDED", completedAt: { gte: new Date(cached.generatedAt) } },
+    ] }, select: { ninjaDeviceId: true } });
+    const decommissions = await prisma.hardwareDecommission.findMany({ where: { status: { not: "FAILED" } }, select: { ninjaDeviceId: true } });
+    const scoped = excludeReservedReconciliation(
+      scopeReconciliation(cached.result, req.nextUrl.searchParams.get("view") === "no-owner-signal" ? "no-owner-signal" : automated),
+      new Set([...reservations, ...decommissions].map((item) => item.ninjaDeviceId)));
     const automationRun = automated ? await prisma.appSetting.findUnique({ where: { key: "scheduled-maintenance:last-run" } }) : null;
     const decisions = await prisma.reconciliationDecision.findMany({
       orderBy: { createdAt: "desc" },
@@ -96,7 +111,7 @@ export async function GET(req: NextRequest) {
     const suppressesRow = (decision: typeof decisions[number] | undefined) =>
       Boolean(
         decision &&
-        (decision.decision !== "DEFER" || decision.createdAt.getTime() > deferCutoff),
+        (["NO", "UNSURE"].includes(decision.decision) || (decision.decision === "DEFER" && decision.createdAt.getTime() > deferCutoff)),
       );
     const includeDecided = req.nextUrl.searchParams.get("includeDecided") === "1";
     const rows = includeDecided
@@ -106,6 +121,7 @@ export async function GET(req: NextRequest) {
       ...scoped,
       automationRun: automationRun ? JSON.parse(automationRun.value) : null,
       rows,
+      summary: { ...scoped.summary, mismatchCount: rows.length },
       count: rows.length,
       decisionCount: latestDecisionByKey.size,
       deferHours,
