@@ -99,13 +99,19 @@ function mockReftab(t: TestContext) {
       ]);
     }
     if (init?.method === "GET" && url.pathname === "/api/loans") {
+      assert.equal(url.searchParams.get("aid"), "0000000468");
       return Response.json([{ lid: 789, email: isaac.email, aids: ["0000000468"], status: "out" }]);
     }
-    assert.equal(init?.method, "POST");
-    const body = JSON.parse(String(init.body));
+    const body = JSON.parse(String(init?.body));
     writes.push({ path: url.pathname, body });
+    if (url.pathname === "/api/loans/789") {
+      assert.equal(init?.method, "PUT");
+      assert.equal(body.status, "in");
+      assert.equal(body.aids, undefined);
+      return Response.json({});
+    }
+    assert.equal(init?.method, "POST");
     assert.deepEqual(body.aids, ["0000000468"]);
-    if (url.pathname === "/api/loans/789/checkin") return Response.json({});
     assert.equal(url.pathname, "/api/loans");
     assert.equal(body.lnid, expectedCheckoutLnid, "must checkout to the intended recipient");
     return checkoutFails ? Response.json({ error: "Checkout rejected" }, { status: 400 }) : Response.json({ lid: 790 });
@@ -122,7 +128,7 @@ for (const directoryAccount of [true, false]) {
     assert.match(before.rows[0].matchReason, /asset title/);
     assert.equal(before.rows[0].ownerEvidence.signal, "stale");
     assert.deepEqual(await automation.reconcileHouseDevices(), { completed: 1, skipped: 0, failed: 0 });
-    assert.deepEqual(writes.map((write) => write.path), ["/api/loans/789/checkin", "/api/loans"]);
+    assert.deepEqual(writes.map((write) => write.path), ["/api/loans/789", "/api/loans"]);
     assert.equal(audits[0].status, "SUCCEEDED");
     assert.equal(audits[0].action, "reassign-owner");
     assert.equal(audits[0].actorEmployeeId, "system:house-reconciliation");
@@ -195,7 +201,7 @@ test("automatically checks in and checks out an LT mismatch and records the new 
   mockReftab(t);
   laptop();
   assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 1, skipped: 0, failed: 0 });
-  assert.deepEqual(writes.map((write) => write.path), ["/api/loans/789/checkin", "/api/loans"]);
+  assert.deepEqual(writes.map((write) => write.path), ["/api/loans/789", "/api/loans"]);
   assert.equal(audits[0].actorEmployeeId, "system:laptop-reconciliation");
   assert.equal(audits[0].status, "SUCCEEDED");
   assert.match(audits[0].notes, /Automatic -LT ownership policy/);

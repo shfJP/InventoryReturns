@@ -36,6 +36,7 @@ for (const scenario of ["correct", "wrong owner", "no loan", "ambiguous loans", 
       const url = new URL(input);
       if (url.pathname === "/api/loanees") return Response.json([{ lnid: 123, email: scenario === "wrong owner" ? "other@example.test" : "owner@example.test" }]);
       assert.equal(url.pathname, "/api/loans");
+      assert.equal(url.searchParams.get("aid"), "FRXN7Y2");
       const loan = { lid: 789, lnid: 123, aids: [scenario === "different asset" ? "OTHER123" : "FRXN7Y2"], status: "out" };
       return Response.json(scenario === "no loan" ? [] : scenario === "ambiguous loans" ? [loan, { ...loan, lid: 790 }] : [loan]);
     });
@@ -224,7 +225,7 @@ test("reports category lookup failures instead of returning an empty category li
   await assert.rejects(fetchReftabCategories(), /403.*Category access denied/);
 });
 
-for (const scenario of ["success", "already exists", "forbidden", "no status", "duplicate status", "bad readback", "wrong identity", "timeout"] as const) {
+for (const scenario of ["success", "nested status", "indexed status", "direct statuses", "single status", "string readback", "unrecognized status", "missing label", "already exists", "forbidden", "no status", "duplicate status", "bad readback", "wrong identity", "timeout"] as const) {
   test(`decommissioned Reftab creation handles ${scenario}`, async (t) => {
     t.mock.method(console, "info", () => {});
     let created = false;
@@ -236,6 +237,12 @@ for (const scenario of ["success", "already exists", "forbidden", "no status", "
       if (url.pathname === "/api/status") {
         assert.equal(init?.method, "GET");
         const status = { statid: 9, name: "Decommissioned" };
+        if (scenario === "nested status") return Response.json({ data: { statuses: [{ statid: 9, statname: "Decommissioned" }] } });
+        if (scenario === "indexed status") return Response.json({ status: { "9": { name: "Decommissioned" } } });
+        if (scenario === "direct statuses") return Response.json([status]);
+        if (scenario === "single status") return Response.json({ status });
+        if (scenario === "unrecognized status") return Response.json({ unexpected: "response" });
+        if (scenario === "missing label") return Response.json({ statuses: [{ statid: 1, name: "Available" }] });
         return Response.json({ statuses: scenario === "no status" ? [] : scenario === "duplicate status" ? [status, { ...status, statid: 10 }] : [status] });
       }
       if (url.pathname === "/api/assets/FRXN7Y2") {
@@ -244,7 +251,7 @@ for (const scenario of ["success", "already exists", "forbidden", "no status", "
         if (!created && scenario !== "already exists") return new Response("", { status: 404 });
         return Response.json({
           aid: scenario === "wrong identity" ? "OTHER" : "FRXN7Y2",
-          status: { name: scenario === "bad readback" ? "Available" : "Decommissioned" }, notes,
+          status: scenario === "string readback" ? "Decommissioned" : { name: scenario === "bad readback" ? "Available" : "Decommissioned" }, notes,
         });
       }
       assert.equal(url.pathname, "/api/assets");
@@ -259,11 +266,15 @@ for (const scenario of ["success", "already exists", "forbidden", "no status", "
       return Response.json({ aid: "FRXN7Y2" });
     });
     const promise = createDecommissionedReftabAsset({ assetTag: "FRXN7Y2", serial: "FRXN7Y2", title: "BDOUCETTE-LT550", categoryId: "456", note: notes });
-    if (scenario === "success") {
+    const succeeds = ["success", "nested status", "indexed status", "direct statuses", "single status", "string readback"].includes(scenario);
+    if (succeeds) {
       assert.deepEqual(await promise, { aid: "FRXN7Y2", statusName: "Decommissioned", notes, url: "https://www.reftab.com/assets/FRXN7Y2" });
     } else {
       await assert.rejects(promise, (error) => {
         assert.ok(error instanceof Error);
+        if (scenario === "no status" || scenario === "unrecognized status") assert.match(error.message, /no readable status labels/);
+        if (scenario === "duplicate status") assert.match(error.message, /Multiple accessible/);
+        if (scenario === "missing label") assert.match(error.message, /No accessible Reftab status label is named/);
         if (["bad readback", "wrong identity", "timeout"].includes(scenario)) {
           assert.ok(error instanceof ReftabWriteError);
           assert.equal(error.outcome, scenario === "timeout" ? "uncertain" : "partial");
@@ -271,7 +282,7 @@ for (const scenario of ["success", "already exists", "forbidden", "no status", "
         return true;
       });
     }
-    assert.equal(writes, ["success", "bad readback", "wrong identity", "timeout"].includes(scenario) ? 1 : 0);
+    assert.equal(writes, succeeds || ["bad readback", "wrong identity", "timeout"].includes(scenario) ? 1 : 0);
   });
 }
 
@@ -311,7 +322,7 @@ for (const failure of ["validation", "checkout", "timeout"] as const) {
   });
 }
 
-for (const scenario of ["success", "checkin rejected", "checkout rejected"] as const) {
+for (const scenario of ["success", "duplicate asset representation", "checkin rejected", "checkout rejected", "multiple items"] as const) {
   test(`owner reassignment handles ${scenario} without hiding a completed check-in`, async (t) => {
     t.mock.method(console, "info", () => {});
     t.mock.method(console, "error", () => {});
@@ -326,17 +337,25 @@ for (const scenario of ["success", "checkin rejected", "checkout rejected"] as c
       }
       if (init?.method === "GET" && url.pathname === "/api/loans") {
         assert.equal(url.searchParams.get("status"), "out");
-        return Response.json([{ lid: 789, lnid: 999, aids: ["FRXN7Y2"], status: "out" }]);
+        assert.equal(url.searchParams.get("aid"), "FRXN7Y2");
+        return Response.json([{
+          lid: 789, lnid: 999, aids: scenario === "multiple items" ? ["FRXN7Y2", "OTHER"] : ["FRXN7Y2"],
+          ...(scenario === "duplicate asset representation" ? { assets: [{ aid: "FRXN7Y2" }] } : {}), status: "out",
+        }]);
       }
-      assert.equal(init?.method, "POST");
       writes.push(url.pathname);
-      assert.deepEqual(JSON.parse(String(init?.body)).aids, ["FRXN7Y2"]);
-      if (url.pathname === "/api/loans/789/checkin") {
+      if (url.pathname === "/api/loans/789") {
+        assert.equal(init?.method, "PUT");
+        assert.deepEqual(JSON.parse(String(init?.body)), {
+          status: "in", notes: "Owner reconciliation approved from NinjaOne for FRXN7Y2.",
+        });
         return scenario === "checkin rejected"
           ? Response.json({ error: "Check-in rejected" }, { status: 400 })
           : Response.json({});
       }
       assert.equal(url.pathname, "/api/loans");
+      assert.equal(init?.method, "POST");
+      assert.deepEqual(JSON.parse(String(init?.body)).aids, ["FRXN7Y2"]);
       return scenario === "checkout rejected"
         ? Response.json({ error: "Checkout rejected" }, { status: 400 })
         : Response.json({ lid: 790 });
@@ -344,7 +363,13 @@ for (const scenario of ["success", "checkin rejected", "checkout rejected"] as c
     const change = reconcileReftabAssetOwner({
       assetTag: "FRXN7Y2", newOwnerEmployeeId: "owner", newOwnerEmail: "owner@example.test",
     });
-    if (scenario === "success") {
+    if (scenario === "multiple items") {
+      await assert.rejects(change, /contains multiple items/);
+      assert.equal(writes.length, 0);
+      assert.equal(loaneeReads, 0);
+      return;
+    }
+    if (scenario === "success" || scenario === "duplicate asset representation") {
       assert.deepEqual(await change, { loanId: "789", loaneeId: "123" });
     } else {
       await assert.rejects(change, (error) => {
@@ -355,7 +380,7 @@ for (const scenario of ["success", "checkin rejected", "checkout rejected"] as c
       });
     }
     assert.deepEqual(writes, scenario === "checkin rejected"
-      ? ["/api/loans/789/checkin"] : ["/api/loans/789/checkin", "/api/loans"]);
+      ? ["/api/loans/789"] : ["/api/loans/789", "/api/loans"]);
     assert.equal(loaneeReads, 1, "only look up the new owner; loan lookup must not scan loanees");
   });
 }

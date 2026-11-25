@@ -369,6 +369,21 @@ audit log preserve each step, including uncertain API results. NinjaOne removal
 requires an OAuth client with Management authorized and
 `NINJAONE_SCOPE="monitoring management"`; Reftab must have a status label named
 **Decommissioned**. NinjaOne may retain the device in its decommissioned view.
+
+Reftab ownership changes check in the existing loan using `PUT /loans/{lid}`
+with `status: "in"`, then check out the asset to the approved recipient.
+Loan lookups filter by asset ID to avoid scanning the entire loan inventory.
+The formerly shipped `loans/{loanId}/checkin` setting is automatically migrated
+to `loans/{loanId}`; update that value in Coolify as well. Loans containing
+multiple items require a manual check-in so reconciliation cannot return
+unrelated assets.
+
+Decommission creation reads the accessible labels from `GET /status` before
+creating an asset. If the saved action reports missing, unreadable, or duplicate
+labels, check Reftab's status-label configuration and the API key's permissions.
+There must be exactly one accessible label named **Decommissioned**.
+Retry the saved failed action in **Actions & Audit** after correcting the
+configuration. Partial or uncertain writes still require verification before retry.
 The startup schema sync creates the durable workflow table. See
 [API_CONNECTIONS.md](./API_CONNECTIONS.md#decommissioning-inactive-hardware)
 for validation and API details.

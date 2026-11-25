@@ -22,7 +22,11 @@ const MODEL_FIELD = (process.env.REF_TAB_MODEL_FIELD ?? "title").trim();
 const REF_TAB_TIMEOUT_MS = Math.max(Number(process.env.REF_TAB_REQUEST_TIMEOUT_MS) || 30_000, 5_000);
 const REF_TAB_LOANEES_LIMIT = Math.min(Math.max(Number(process.env.REF_TAB_LOANEES_LIMIT) || 100, 1), 500);
 const REF_TAB_SYNC_SOURCE = (process.env.REF_TAB_SYNC_SOURCE ?? "loans").trim().toLowerCase();
-const REF_TAB_CHECKIN_ENDPOINT_TEMPLATE = (process.env.REF_TAB_CHECKIN_ENDPOINT_TEMPLATE ?? "loans/{loanId}/checkin").trim();
+// Migrate the previously shipped, unsupported endpoint even when it was copied
+// into deployment settings. Reftab ends loans with PUT /loans/{lid}.
+const configuredCheckinEndpoint = process.env.REF_TAB_CHECKIN_ENDPOINT_TEMPLATE?.trim();
+const REF_TAB_CHECKIN_ENDPOINT_TEMPLATE = !configuredCheckinEndpoint || /^\/?loans\/\{(?:loanId|id)\}\/checkin\/?$/.test(configuredCheckinEndpoint)
+  ? "loans/{loanId}" : configuredCheckinEndpoint;
 const REF_TAB_CHECKOUT_ENDPOINT = (process.env.REF_TAB_CHECKOUT_ENDPOINT ?? "loans").trim();
 const REF_TAB_CREATE_ASSET_ENDPOINT = (process.env.REF_TAB_CREATE_ASSET_ENDPOINT ?? "assets").trim();
 const REF_TAB_CREATE_LOANEE_ENDPOINT = (process.env.REF_TAB_CREATE_LOANEE_ENDPOINT ?? "loanees").trim();
@@ -1510,7 +1514,7 @@ function checkedOutByFromLoan(loan: Record<string, unknown>): ReftabUsageActor |
 }
 
 function loanItemCount(loan: Record<string, unknown>): number {
-  const counts = ["assets", "items", "assetItems", "asset_items"].map((key) => {
+  const counts = ["aids", "assets", "items", "assetItems", "asset_items"].map((key) => {
     const value = getNestedLoose(loan, key);
     return Array.isArray(value) ? value.length : 0;
   });
@@ -1552,7 +1556,7 @@ async function findCurrentLoanForAsset(target: { assetTag: string; aid?: string 
   let offset = 0;
 
   while (offset < 500_000) {
-    const loans = listFromResponse(await fetchReftabJson(`loans?limit=${limit}&offset=${offset}&status=out`, `Reftab loans offset ${offset}`));
+    const loans = listFromResponse(await fetchReftabJson(`loans?limit=${limit}&offset=${offset}&status=out&aid=${encodeURIComponent(target.aid ?? target.assetTag)}`, `Reftab loans offset ${offset}`));
     if (loans.length === 0) break;
 
     for (const loan of loans) {
@@ -1564,8 +1568,16 @@ async function findCurrentLoanForAsset(target: { assetTag: string; aid?: string 
         managerInfoFromLoanee(loaneeFromRecord(loan, loaneeMaps)),
         managerInfoFromRecord(loan)
       );
-      const assignment = assignmentsFromLoan(loan, assignee, managerInfo).find((item) => sameReftabAsset(item, target));
-      if (assignment) return { loanId, assignment };
+      const assignments = assignmentsFromLoan(loan, assignee, managerInfo);
+      const assignment = assignments.find((item) => sameReftabAsset(item, target));
+      if (assignment) {
+        // PUT ends the entire loan, so never return other assets as a side effect.
+        const assetIds = new Set(assignments.map((item) => normalizeKey(item.aid ?? item.asset_tag)));
+        if (loanItemCount(loan) > 1 || assetIds.size > 1) {
+          throw new Error("This Reftab loan contains multiple items. Check in the selected asset in Reftab before retrying ownership reconciliation.");
+        }
+        return { loanId, assignment };
+      }
     }
 
     if (loans.length < limit) break;
@@ -1787,8 +1799,8 @@ export async function reconcileReftabAssetOwner(input: ReftabOwnerReconciliation
 
   const aid = input.aid ?? currentLoan.assignment.aid ?? input.assetTag;
   const note = input.note ?? `Owner reconciliation approved from NinjaOne for ${input.assetTag}.`;
-  await sendReftabJson(checkinEndpoint(currentLoan.loanId), "POST", `Reftab check-in loan ${currentLoan.loanId}`, {
-    aids: [aid],
+  await sendReftabJson(checkinEndpoint(currentLoan.loanId), "PUT", `Reftab check-in loan ${currentLoan.loanId}`, {
+    status: "in",
     notes: note,
   });
   await checkoutReftabAsset(input.assetTag, aid, checkoutRef, note).catch((error) => {
@@ -1805,7 +1817,7 @@ export async function verifyReftabQueuedOwner(assetTag: string, email: string) {
   const matches: Record<string, unknown>[] = [];
   for (let offset = 0; offset < 500_000; offset += ASSETS_LIMIT) {
     const loans = listFromResponse(await fetchReftabJson(
-      `loans?limit=${ASSETS_LIMIT}&offset=${offset}&status=out`, `Verify Reftab loans offset ${offset}`));
+      `loans?limit=${ASSETS_LIMIT}&offset=${offset}&status=out&aid=${encodeURIComponent(assetTag)}`, `Verify Reftab loans offset ${offset}`));
     for (const loan of loans) {
       if (!isCurrentLoanRecord(loan)) continue;
       const assignee = getLoanAssignee(loan, maps) || "current-loanee";
@@ -2039,6 +2051,20 @@ async function inferCreateAssetLocationId(input: ReftabCreateInput): Promise<str
 
 export type ReftabDecommissionReceipt = { aid: string; statusName: string; notes: string; url: string };
 
+function statusLabelsFromResponse(data: unknown, depth = 0): Record<string, unknown>[] {
+  if (depth > 5 || !data || typeof data !== "object") return [];
+  if (Array.isArray(data)) return data.flatMap((item) => statusLabelsFromResponse(item, depth + 1));
+  const record = data as Record<string, unknown>;
+  if (firstString(record, ["statid", "id"]) && firstString(record, ["name", "statusName", "statname", "status"])) return [record];
+  for (const key of ["statuses", "status", "data", "items", "results"]) {
+    if (record[key] != null && typeof record[key] === "object") return statusLabelsFromResponse(record[key], depth + 1);
+  }
+  // Some metadata responses index labels by their status ID.
+  return Object.entries(record).flatMap(([key, value]) =>
+    /^\d+$/.test(key) && value && typeof value === "object" && !Array.isArray(value)
+      ? statusLabelsFromResponse({ statid: key, ...value }, depth + 1) : []);
+}
+
 async function getReftabAsset(aid: string): Promise<Record<string, unknown> | null> {
   const url = `${REF_TAB_URL}/assets/${encodeURIComponent(aid)}`;
   const response = await fetchWithTimeout(url, {
@@ -2056,7 +2082,7 @@ async function getReftabAsset(aid: string): Promise<Record<string, unknown> | nu
 export async function verifyDecommissionedReftabAsset(aid: string, expectedNotes: string): Promise<ReftabDecommissionReceipt> {
   const asset = await getReftabAsset(aid);
   if (!asset || firstString(asset, ["aid", "id"]) !== aid) throw new Error("The decommissioned asset could not be verified in Reftab.");
-  const statusName = firstString(asset, ["status.name", "statusName"]);
+  const statusName = firstString(asset, ["status.name", "statusName", "status"]);
   if (statusName?.trim().toLowerCase() !== "decommissioned" || asset.notes !== expectedNotes) {
     throw new Error("Reftab must show the Decommissioned status and the complete app-generated Asset Notes before confirmation.");
   }
@@ -2068,10 +2094,16 @@ export async function createDecommissionedReftabAsset(
 ): Promise<ReftabDecommissionReceipt> {
   if (!input.categoryId) throw new Error("Select a Reftab category before decommissioning.");
   const metadata = await fetchReftabJson("status", "Reftab status labels");
-  const record = metadata && typeof metadata === "object" ? metadata as Record<string, unknown> : {};
-  const statuses = listFromResponse(Array.isArray(metadata) ? metadata : record.statuses ?? record.status ?? metadata);
-  const matches = statuses.filter((status) => firstString(status, ["name", "statusName"])?.trim().toLowerCase() === "decommissioned");
-  if (matches.length !== 1) throw new Error('Reftab must have exactly one accessible status label named "Decommissioned".');
+  const statuses = statusLabelsFromResponse(metadata);
+  const matches = statuses.filter((status) => firstString(status, ["name", "statusName", "statname", "status"])?.trim().toLowerCase() === "decommissioned");
+  if (matches.length !== 1) {
+    const reason = matches.length > 1
+      ? 'Multiple accessible Reftab status labels are named "Decommissioned". Give the intended label a unique name.'
+      : statuses.length > 0
+        ? 'No accessible Reftab status label is named "Decommissioned". Create or rename that label in Reftab and verify the API key can access it.'
+        : 'Reftab returned no readable status labels from GET /status. Verify status labels exist and the API key has permission to read them.';
+    throw new Error(`${reason} No asset was created. Retry the saved action after correcting Reftab configuration.`);
+  }
   const statid = numericRequiredId(firstString(matches[0], ["statid", "id"]), "Decommissioned status ID");
   if (await getReftabAsset(input.assetTag)) {
     throw new Error("This asset already exists in Reftab. Inspect it before taking further action.");
