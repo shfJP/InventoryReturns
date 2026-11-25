@@ -22,6 +22,8 @@ let auditFails: boolean;
 let cacheInvalidations: number;
 let computerName: string;
 let categories: { cid: number; name: string }[];
+let jobs: Record<string, any>[];
+let processNext: typeof import("./reconciliation-jobs").processNextReconciliationJob;
 
 before(async () => {
   const models = {
@@ -44,7 +46,22 @@ before(async () => {
       },
     },
     hardwareDecommission: { findMany: async () => [] },
-    reconciliationJob: { findFirst: async () => null },
+    reconciliationJob: {
+      findFirst: async () => jobs.find((job) => ["QUEUED", "RUNNING", "FAILED", "REVIEW_REQUIRED", "BLOCKED"].includes(job.status)) ?? null,
+      create: async ({ data }: { data: RecordData }) => {
+        const job = { id: String(jobs.length), status: "QUEUED", attempts: 0, categoryId: null, ...data, updatedAt: new Date() };
+        jobs.push(job);
+        return job;
+      },
+      updateMany: async ({ where, data }: { where: RecordData; data: Record<string, any> }) => {
+        if (!where.id) return { count: 0 };
+        const job = jobs.find((job) => job.id === where.id && (!where.status || job.status === where.status));
+        if (!job) return { count: 0 };
+        const attempts = data.attempts?.increment ? job.attempts + data.attempts.increment : job.attempts;
+        Object.assign(job, data, { attempts, updatedAt: new Date() });
+        return { count: 1 };
+      },
+    },
     equipmentAssignment: {
       findMany: async () => assignments,
       findFirst: async () => assignments[0] ?? null,
@@ -85,6 +102,7 @@ before(async () => {
   service = await import("./missing-reftab-asset");
   reconciliation = await import("./owner-reconciliation");
   automation = await import("./house-reconciliation");
+  processNext = (await import("./reconciliation-jobs")).processNextReconciliationJob;
 });
 
 after(() => { if (originalPrisma === undefined) delete globals.prisma; else globals.prisma = originalPrisma; });
@@ -94,6 +112,7 @@ beforeEach(() => {
   assignments = [];
   unresolved = [];
   audits = [];
+  jobs = [];
   writes = [];
   existingLiveAsset = checkoutFails = auditFails = false;
   cacheInvalidations = 0;
@@ -135,11 +154,15 @@ function mockReftab(t: TestContext, expectedLoaneeId = 123) {
 
 test("automatically imports a missing House device and does not repeat it", async (t) => {
   mockReftab(t);
-  assert.deepEqual(await automation.reconcileHouseDevices(), { completed: 1, skipped: 0, failed: 0 });
+  assert.deepEqual(await automation.reconcileHouseDevices(), { completed: 0, queued: 1, skipped: 0, failed: 0 });
+  assert.equal(writes.length, 0);
+  assert.equal(jobs[0].recipientEmail, owner.email);
+  await processNext();
+  assert.equal(jobs[0].status, "SUCCEEDED");
   assert.deepEqual(writes.map((item) => item.path), ["/api/assets", "/api/loans"]);
   assert.equal(unresolved[0].employeeEmail, owner.email);
   assert.equal(audits[0].actorEmployeeId, "system:house-reconciliation");
-  assert.deepEqual(await automation.reconcileHouseDevices(), { completed: 0, skipped: 0, failed: 0 });
+  assert.deepEqual(await automation.reconcileHouseDevices(), { completed: 0, queued: 0, skipped: 0, failed: 0 });
   assert.equal(writes.length, 2);
   assert.equal(writes[0].body.cid, 456);
 });

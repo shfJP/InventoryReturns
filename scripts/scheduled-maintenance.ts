@@ -8,6 +8,7 @@ import { isSnowflakeConfigured, syncOrganizationReportToSnowflake } from "../src
 import { executeMaintenancePlan, maintenancePlan } from "../src/lib/maintenance-plan";
 import { processNextReconciliationJob } from "../src/lib/reconciliation-jobs";
 import { withMaintenanceLock } from "../src/lib/maintenance-lock";
+import { restoreHistoricalReconciliationJobs } from "../src/lib/reconciliation-job-recovery";
 
 const mode = process.argv[2] ?? "all";
 const key = "scheduled-maintenance:last-run";
@@ -17,6 +18,7 @@ async function main() {
   // The dedicated connection retains the lock for the entire run. A second
   // Coolify invocation exits without changing the active run's status.
   await withMaintenanceLock(async () => {
+    await restoreHistoricalReconciliationJobs();
     const run = {
       mode, startedAt: new Date().toISOString(), finishedAt: null as string | null,
       state: "running", stage: "starting", error: null as string | null,

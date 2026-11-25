@@ -1,10 +1,8 @@
-import { prisma } from "./db";
 import { getOwnerReconciliationResult } from "./owner-reconciliation";
 import { isHouseNinjaLogin } from "./missing-reftab-policy";
-import { reconcileOwner } from "./reconcile-owner";
-import { addMissingReftabAsset } from "./missing-reftab-asset";
-import { outstandingJobStatuses } from "./reconciliation-jobs";
+import { enqueueReconciliation, outstandingJobStatuses } from "./reconciliation-jobs";
 import { isAutomaticOwnerLaptop } from "./automatic-owner-policy";
+import { prisma } from "./db";
 
 const actor = {
   actorEmployeeId: "system:house-reconciliation",
@@ -16,15 +14,15 @@ export async function reconcileAutomaticOwners(includeLaptops = true) {
   const result = await getOwnerReconciliationResult();
   const candidates = [
     ...result.rows.filter((row) => isHouseNinjaLogin(row.ninjaOwnerRaw) || (includeLaptops && isAutomaticOwnerLaptop(row.ninjaDevice))).map((row) => ({
-      assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id, action: "reassign-owner",
+      assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id, action: "reassign-owner" as const,
       house: isHouseNinjaLogin(row.ninjaOwnerRaw),
     })),
     ...result.missingReftabRows.filter((row) => isHouseNinjaLogin(row.ninjaOwnerRaw)).map((row) => ({
-      assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id, action: "add-missing-asset",
+      assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id, action: "add-missing-asset" as const,
       house: true,
     })),
   ];
-  let completed = 0;
+  let queued = 0;
   let skipped = 0;
   let failed = 0;
   for (const candidate of candidates) {
@@ -34,44 +32,24 @@ export async function reconcileAutomaticOwners(includeLaptops = true) {
       continue;
     }
     try {
-      await prisma.$transaction(async (lock) => {
-        // Retain the shared House lock namespace so both policies coordinate
-        // with scheduled, manual and House-only callers across processes.
-        const [lease] = await lock.$queryRaw<{ acquired: boolean }[]>`
-          SELECT pg_try_advisory_xact_lock(hashtext('house-reconciliation'), hashtext(${candidate.ninjaDeviceId})) AS acquired
-        `;
-        if (!lease.acquired) { skipped++; return; }
-        const reserved = await prisma.reconciliationJob.findFirst({ where: {
-          OR: [{ ninjaDeviceId: candidate.ninjaDeviceId }, { assetTag: candidate.assetTag }],
-          status: { in: outstandingJobStatuses },
-        }, select: { id: true } });
-        if (reserved) { skipped++; return; }
-        const unfinished = await prisma.reconciliationAudit.findFirst({
-          where: {
-            assetTag: candidate.assetTag,
-            action: { in: ["reassign-owner", "add-missing-asset", "decommission-missing-asset"] },
-            status: { in: ["PENDING", "REVIEW_REQUIRED"] },
-          }, select: { id: true },
-        });
-        // Never repeat an uncertain external write automatically.
-        if (unfinished) { skipped++; return; }
-        // Each service re-reads the current row, uses email-based checkout and
-        // records its external/local outcome through the normal audit workflow.
-        if (candidate.action === "reassign-owner") await reconcileOwner({
-          ...candidate, requireHouse: candidate.house, requireLaptop: !candidate.house,
-        }, candidate.house ? actor : {
-          actorEmployeeId: "system:laptop-reconciliation",
-          actorName: "Automatic -LT ownership reconciliation", actorEmail: null,
-        });
-        else await addMissingReftabAsset({ ...candidate, requireHouse: true }, actor);
-        completed++;
-      }, { timeout: 30 * 60_000, maxWait: 5_000 });
+      const reserved = await prisma.reconciliationJob.findFirst({ where: {
+        OR: [{ ninjaDeviceId: candidate.ninjaDeviceId }, { assetTag: candidate.assetTag }],
+        status: { in: outstandingJobStatuses },
+      }, select: { id: true } });
+      if (reserved) { skipped++; continue; }
+      // Persist automation decisions through the same queue as staff approvals.
+      // Failures remain reserved and are retried by the worker/maintenance job.
+      await enqueueReconciliation(candidate, candidate.house ? actor : {
+        actorEmployeeId: "system:laptop-reconciliation",
+        actorName: "Automatic -LT ownership reconciliation", actorEmail: null,
+      });
+      queued++;
     } catch (error) {
       failed++;
       console.error(`[automatic-owner-reconciliation] ${candidate.assetTag} failed`, error);
     }
   }
-  const counts = { completed, skipped, failed };
+  const counts = { completed: 0, queued, skipped, failed };
   console.info("[automatic-owner-reconciliation]", counts);
   return counts;
 }

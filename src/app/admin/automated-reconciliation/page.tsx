@@ -10,7 +10,7 @@ type ResponseData = OwnerReconciliationResult & {
   cache: { generatedAt: string };
   automationRun: {
     mode: string; state: string; stage: string; startedAt: string; finishedAt: string | null;
-    error: string | null; reconciliation: { completed: number; skipped: number; failed: number } | null;
+    error: string | null; reconciliation: { completed: number; queued?: number; skipped: number; failed: number } | null;
   } | null;
 };
 
@@ -62,7 +62,7 @@ export default function AutomatedReconciliationPage() {
       {run ? <>
         <p>{run.state} · {run.mode} · Last stage: {run.stage}</p>
         <p className="text-sm">Started {new Date(run.startedAt).toLocaleString()} · Finished {run.finishedAt ? new Date(run.finishedAt).toLocaleString() : "Not recorded"}</p>
-        {run.reconciliation && <p>{run.reconciliation.completed} completed · {run.reconciliation.skipped} skipped · {run.reconciliation.failed} failed</p>}
+        {run.reconciliation && <p>{run.reconciliation.queued ?? 0} saved in Actions &amp; Audit · {run.reconciliation.completed} completed · {run.reconciliation.skipped} skipped · {run.reconciliation.failed} failed to queue</p>}
         {run.error && <p className="text-red-700">{run.error}</p>}
         {run.state === "running" && <p className="text-sm">If the scheduled process was interrupted, completion will remain unrecorded. Check Coolify task logs.</p>}
       </> : <p>No external scheduled run recorded yet.</p>}

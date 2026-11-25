@@ -40,10 +40,11 @@ export function scopeReconciliation(result: OwnerReconciliationResult, view: boo
   };
 }
 
-export function excludeReservedReconciliation(result: OwnerReconciliationResult, deviceIds: Set<string>) {
-  const rows = result.rows.filter((row) => !deviceIds.has(row.ninjaDevice.id));
-  const missingReftabRows = result.missingReftabRows.filter((row) => !deviceIds.has(row.ninjaDevice.id));
-  const reportItems = result.reportItems.filter((row) => !row.ninjaDeviceId || !deviceIds.has(row.ninjaDeviceId));
+export function excludeReservedReconciliation(result: OwnerReconciliationResult, deviceIds: Set<string>, assetTags = new Set<string>()) {
+  const reserved = (id: string | null, tag: string) => Boolean(id && deviceIds.has(id)) || assetTags.has(tag);
+  const rows = result.rows.filter((row) => !reserved(row.ninjaDevice.id, row.assetTag));
+  const missingReftabRows = result.missingReftabRows.filter((row) => !reserved(row.ninjaDevice.id, row.assetTag));
+  const reportItems = result.reportItems.filter((row) => !reserved(row.ninjaDeviceId, row.assetTag));
   const countOwners = (status: MissingReftabAssetRow["ownerStatus"], reportStatus: string) => new Set([
     ...reportItems.filter((item) => item.status === reportStatus).map((item) => item.ninjaDeviceId),
     ...missingReftabRows.filter((row) => row.ownerStatus === status).map((row) => row.ninjaDevice.id),

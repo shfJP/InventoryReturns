@@ -16,6 +16,7 @@ let queued: Record<string, unknown> | null;
 let claimed: boolean;
 let auditsRead: number;
 let auditRecords: Record<string, unknown>[];
+let readyQuery: unknown;
 const recipient = "ithelp@sevenhills.org";
 const oldOwner = { employeeId: "OLD", displayName: "Old owner", email: "old@example.test", upn: null, isActive: true };
 const db = {
@@ -33,7 +34,7 @@ const db = {
   reconciliationJob: {
     findUniqueOrThrow: async () => active,
     findFirst: async ({ where }: { where: { status?: unknown; OR?: unknown } }) => {
-      if (!where.status && where.OR) return queued;
+      if (!where.status && where.OR) { readyQuery = where; return queued; }
       if (where.status && typeof where.status === "object" && "in" in where.status && !where.OR) return interrupted;
       return active;
     },
@@ -58,10 +59,20 @@ before(async () => {
 beforeEach(() => {
   active = null; interrupted = null; unfinished = null;
   heartbeat = String(Date.now()); created = []; updates = []; queued = null; claimed = true; auditsRead = 0; auditRecords = [];
+  readyQuery = null;
 });
 after(() => { if (original === undefined) delete globals.prisma; else globals.prisma = original; });
 const input = { action: "reassign-owner" as const, assetTag: "0000000024", ninjaDeviceId: "2224" };
 const actor = { actorEmployeeId: "ABRW", actorName: "Reviewer", actorEmail: null };
+
+test("worker includes failed actions without a retry timestamp in its ready queue", async () => {
+  await processNext();
+  assert.deepEqual(readyQuery, { OR: [
+    { status: "QUEUED" },
+    { status: "FAILED", OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: (readyQuery as any).OR[1].OR[1].nextAttemptAt.lte } }] },
+  ] });
+  assert.ok((readyQuery as any).OR[1].OR[1].nextAttemptAt.lte instanceof Date);
+});
 
 test("persists a job with the authenticated actor without contacting Reftab", async (t) => {
   t.mock.method(globalThis, "fetch", async () => { assert.fail("enqueue must not contact Reftab"); });

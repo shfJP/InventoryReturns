@@ -48,6 +48,18 @@ retry after five minutes with exponential backoff capped at 24 hours. Fix the
 reported credentials, sync, or category issue; no new approval is needed.
 Actions & Audit also provides **Retry now** and **Set category & retry**.
 
+House and -LT automation now save actions to this same queue. The automation
+page reports how many actions were saved; execution outcomes appear in
+Actions & Audit. Ownership Review shows a saved-action summary and excludes
+reserved asset tags as well as device IDs, including failed and held actions.
+Database preparation at startup and scheduled maintenance recover earlier
+unlinked failed attempts into saved actions, retaining the recorded actor,
+recipient email, and decommission category. Definite failures are scheduled
+for retry; uncertain writes await readback. If the original email/category
+was not recorded, the recovered action stays blocked in Actions & Audit
+until explicitly returned for a new approval. Later completions and existing
+saved or cancelled actions prevent recovery from reviving obsolete failures.
+
 The queue list refreshes every five seconds and audit/decommission history
 every ten seconds. Leaving the page does not cancel saved decisions. Keep a
 bulk submission page open until all decisions have been saved; execution then

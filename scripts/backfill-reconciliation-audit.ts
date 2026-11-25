@@ -1,4 +1,5 @@
 import { prisma } from "../src/lib/db";
+import { restoreHistoricalReconciliationJobs } from "../src/lib/reconciliation-job-recovery";
 
 // Old decisions are retained as historical records, without claiming that the
 // earlier API captured an external outcome or login evidence. The unique
@@ -44,6 +45,7 @@ async function main() {
     cursor = decisions[decisions.length - 1].id;
   }
   console.info(`[reconciliation-audit] Imported ${imported} historical decision(s).`);
+  console.info(`[reconciliation-jobs] Restored ${await restoreHistoricalReconciliationJobs()} earlier action(s).`);
 }
 
 main().catch((error) => { console.error(error); process.exitCode = 1; }).finally(() => prisma.$disconnect());

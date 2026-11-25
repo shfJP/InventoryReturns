@@ -37,6 +37,21 @@ test("saved approvals leave review and all remediation counts without changing t
   assert.equal(result.missingReftabRows.length, 2);
 });
 
+test("an approved asset remains reserved when a sync changes its NinjaOne match", () => {
+  const result = {
+    rows: [{ ...owner("new-device", "PC", "alice"), assetTag: "approved-asset" }],
+    missingReftabRows: [{ ...missing("other-device", "PC", "alice"), assetTag: "approved-asset" }],
+    reportItems: [{ assetTag: "approved-asset", ninjaDeviceId: "new-device", status: "Owner mismatch" }],
+    summary: {},
+  } as unknown as OwnerReconciliationResult;
+  const filtered = excludeReservedReconciliation(result, new Set(["old-device"]), new Set(["approved-asset"]));
+  assert.equal(filtered.rows.length, 0);
+  assert.equal(filtered.missingReftabRows.length, 0);
+  assert.equal(filtered.reportItems.length, 0);
+  assert.equal(filtered.summary.mismatchCount, 0);
+  assert.equal(filtered.summary.missingReftabCount, 0);
+});
+
 test("manual and automation queues partition eligible policies without losing ordinary laptop imports", () => {
   const result: OwnerReconciliationResult = {
     rows: [owner("house", "SH-PC", "7HILLS\\House"), owner("lt", "SH-Lt", "alice"), owner("manual", "SH-PC", "bob")],

@@ -125,7 +125,7 @@ export async function processNextReconciliationJob() {
       error: "Worker interrupted. Verify Reftab before replaying an external write." },
   });
   const job = await prisma.reconciliationJob.findFirst({
-    where: { OR: [{ status: "QUEUED" }, { status: "FAILED", nextAttemptAt: { lte: new Date() } }] },
+    where: { OR: [{ status: "QUEUED" }, { status: "FAILED", OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: new Date() } }] }] },
     orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
   });
   if (!job) {
@@ -174,7 +174,9 @@ export async function processNextReconciliationJob() {
         if (changedRecipient) throw new Error("Inventory or approved recipient changed. Review this saved action; it will not be redirected automatically.");
       }
       const input = { assetTag: job.assetTag, ninjaDeviceId: job.ninjaDeviceId,
-        categoryId: job.categoryId ?? undefined, expectedRecipientEmail: job.recipientEmail ?? undefined };
+        categoryId: job.categoryId ?? undefined, expectedRecipientEmail: job.recipientEmail ?? undefined,
+        requireHouse: job.actorEmployeeId === "system:house-reconciliation",
+        requireLaptop: job.actorEmployeeId === "system:laptop-reconciliation" };
       const actor = { actorEmployeeId: job.actorEmployeeId, actorName: job.actorName, actorEmail: job.actorEmail, jobId: job.id };
       const changed = job.action === "add-missing-asset" ? await addMissingReftabAsset(input, actor)
         : job.action === "decommission-missing-asset"

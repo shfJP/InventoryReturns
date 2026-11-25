@@ -91,11 +91,12 @@ export async function GET(req: NextRequest) {
     const reservations = await prisma.reconciliationJob.findMany({ where: { OR: [
       { status: { in: outstandingJobStatuses } },
       { status: "SUCCEEDED", completedAt: { gte: new Date(cached.generatedAt) } },
-    ] }, select: { ninjaDeviceId: true } });
+    ] }, select: { ninjaDeviceId: true, assetTag: true, status: true } });
     const decommissions = await prisma.hardwareDecommission.findMany({ where: { status: { not: "FAILED" } }, select: { ninjaDeviceId: true } });
     const scoped = excludeReservedReconciliation(
       scopeReconciliation(cached.result, req.nextUrl.searchParams.get("view") === "no-owner-signal" ? "no-owner-signal" : automated),
-      new Set([...reservations, ...decommissions].map((item) => item.ninjaDeviceId)));
+      new Set([...reservations, ...decommissions].map((item) => item.ninjaDeviceId)),
+      new Set(reservations.map((item) => item.assetTag)));
     const automationRun = automated ? await prisma.appSetting.findUnique({ where: { key: "scheduled-maintenance:last-run" } }) : null;
     const decisions = await prisma.reconciliationDecision.findMany({
       orderBy: { createdAt: "desc" },
@@ -119,6 +120,11 @@ export async function GET(req: NextRequest) {
       : scoped.rows.filter((row) => automated || !suppressesRow(latestDecisionByKey.get(`${row.assetTag}\u0000${row.ninjaDevice.id}`)));
     return NextResponse.json({
       ...scoped,
+      savedActions: {
+        outstanding: reservations.filter((item) => outstandingJobStatuses.includes(item.status)).length,
+        retrying: reservations.filter((item) => item.status === "FAILED").length,
+        held: reservations.filter((item) => ["REVIEW_REQUIRED", "BLOCKED"].includes(item.status)).length,
+      },
       automationRun: automationRun ? JSON.parse(automationRun.value) : null,
       rows,
       summary: { ...scoped.summary, mismatchCount: rows.length },

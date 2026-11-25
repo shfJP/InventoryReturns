@@ -11,7 +11,7 @@ type Job = {
   createdAt: string; completedAt: string | null; nextAttemptAt: string | null;
 };
 const statuses: Record<string, string> = {
-  QUEUED: "Decision saved · queued", RUNNING: "In progress", FAILED: "Failed · retry pending",
+  QUEUED: "Decision saved · queued", RUNNING: "In progress", FAILED: "Attempt failed · requeued",
   REVIEW_REQUIRED: "Awaiting verification", BLOCKED: "Approval needs review", SUCCEEDED: "Completed", CANCELLED: "Returned to review",
 };
 const actions: Record<string, string> = {

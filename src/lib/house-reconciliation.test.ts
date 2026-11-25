@@ -17,7 +17,8 @@ let writes: { path: string; body: RecordData }[];
 let login: string;
 let likelyUser: string;
 let checkoutFails: boolean;
-let locked: boolean;
+let jobs: RecordData[];
+let processNext: typeof import("./reconciliation-jobs").processNextReconciliationJob;
 let computerName: string;
 let expectedCheckoutLnid: number;
 let automation: typeof import("./house-reconciliation");
@@ -39,7 +40,22 @@ before(async () => {
       findFirst: async () => users.find((user) => user.email === it.email) ?? null,
     },
     hardwareDecommission: { findMany: async () => [] },
-    reconciliationJob: { findFirst: async () => null },
+    reconciliationJob: {
+      findFirst: async ({ where }: RecordData) => jobs.find((job) => where.status?.in
+        ? where.status.in.includes(job.status)
+        : job.status === "QUEUED" || (job.status === "FAILED" && (!job.nextAttemptAt || job.nextAttemptAt <= new Date())) ) ?? null,
+      create: async ({ data }: RecordData) => {
+        const job = { id: String(jobs.length), status: "QUEUED", attempts: 0, categoryId: null, ...data, updatedAt: new Date() };
+        jobs.push(job); return job;
+      },
+      updateMany: async ({ where, data }: RecordData) => {
+        if (!where.id) return { count: 0 };
+        const job = jobs.find((job) => job.id === where.id && (!where.status || job.status === where.status));
+        if (!job) return { count: 0 };
+        const attempts = data.attempts?.increment ? job.attempts + data.attempts.increment : job.attempts;
+        Object.assign(job, data, { attempts, updatedAt: new Date() }); return { count: 1 };
+      },
+    },
     equipmentAssignment: {
       findMany: async () => assignments.map((assignment) => ({ ...assignment, user: users.find((user) => user.employeeId === assignment.assignedToEmployeeId) })),
       deleteMany: async ({ where }: RecordData) => {
@@ -59,7 +75,7 @@ before(async () => {
     },
     reconciliationDecision: { create: async ({ data }: RecordData) => { const decision = { ...data, id: String(decisions.length) }; decisions.push(decision); return decision; } },
     appSetting: { deleteMany: async () => ({ count: 1 }) },
-    $queryRaw: async () => [{ acquired: locked }],
+    $queryRaw: async () => [],
   };
   globals.prisma = { ...models, $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback(models) };
   Object.assign(process.env, {
@@ -71,6 +87,7 @@ before(async () => {
   automaticOwners = await import("./automatic-owner-reconciliation");
   reconciliation = await import("./owner-reconciliation");
   ownerService = await import("./reconcile-owner");
+  processNext = (await import("./reconciliation-jobs")).processNextReconciliationJob;
 });
 after(() => { if (originalPrisma === undefined) delete globals.prisma; else globals.prisma = originalPrisma; });
 beforeEach(() => {
@@ -81,7 +98,7 @@ beforeEach(() => {
   unresolved = []; audits = []; decisions = []; writes = [];
   login = likelyUser = "7HILLS\\House";
   checkoutFails = false;
-  locked = true;
+  jobs = [];
 });
 
 function mockReftab(t: TestContext) {
@@ -118,6 +135,20 @@ function mockReftab(t: TestContext) {
   });
 }
 
+async function runOwners(houseOnly = false, afterSync = false) {
+  const writesBefore = writes.length;
+  const countBefore = jobs.length;
+  const result = houseOnly ? await automation.reconcileHouseDevices()
+    : afterSync ? await automaticOwners.reconcileAutomaticOwnersAfterSync()
+    : await automaticOwners.reconcileAutomaticOwners();
+  assert.equal(writes.length, writesBefore, "policy evaluation must only save decisions");
+  assert.equal("queued" in result ? result.queued : 0, jobs.length - countBefore);
+  const pending = jobs.filter((job) => job.status === "QUEUED");
+  for (const _ of pending) await processNext();
+  return { completed: pending.filter((job) => job.status === "SUCCEEDED").length,
+    skipped: result.skipped, failed: result.failed + pending.filter((job) => job.status !== "SUCCEEDED").length };
+}
+
 for (const directoryAccount of [true, false]) {
   test(`automatically moves existing Isaac asset to IT Help with stale House evidence, directory account=${directoryAccount}`, async (t) => {
     mockReftab(t);
@@ -127,17 +158,17 @@ for (const directoryAccount of [true, false]) {
     assert.ok(before.rows[0].confidence >= 85);
     assert.match(before.rows[0].matchReason, /asset title/);
     assert.equal(before.rows[0].ownerEvidence.signal, "stale");
-    assert.deepEqual(await automation.reconcileHouseDevices(), { completed: 1, skipped: 0, failed: 0 });
+    assert.deepEqual(await runOwners(true), { completed: 1, skipped: 0, failed: 0 });
     assert.deepEqual(writes.map((write) => write.path), ["/api/loans/789", "/api/loans"]);
-    assert.equal(audits[0].status, "SUCCEEDED");
-    assert.equal(audits[0].action, "reassign-owner");
-    assert.equal(audits[0].actorEmployeeId, "system:house-reconciliation");
-    assert.match(audits[0].proposedOwnerName, /ithelp@sevenhills.org/);
+    assert.equal(audits.find((audit) => audit.action === "reassign-owner")!.status, "SUCCEEDED");
+    assert.equal(audits.find((audit) => audit.action === "reassign-owner")!.action, "reassign-owner");
+    assert.equal(audits.find((audit) => audit.action === "reassign-owner")!.actorEmployeeId, "system:house-reconciliation");
+    assert.match(audits.find((audit) => audit.action === "reassign-owner")!.proposedOwnerName, /ithelp@sevenhills.org/);
     assert.equal(decisions[0].reason, "Approved and written to Reftab");
     const after = await reconciliation.getOwnerReconciliationResult();
     assert.equal(after.rows.length, 0);
     assert.equal(after.reportItems[0].status, "Aligned");
-    assert.deepEqual(await automation.reconcileHouseDevices(), { completed: 0, skipped: 0, failed: 0 });
+    assert.deepEqual(await runOwners(true), { completed: 0, skipped: 0, failed: 0 });
     assert.equal(writes.length, 2, "next sync must not repeat the write");
   });
 }
@@ -145,39 +176,41 @@ for (const directoryAccount of [true, false]) {
 test("does not automatically move other domain House accounts", async (t) => {
   mockReftab(t);
   login = likelyUser = "OTHER\\House";
-  assert.deepEqual(await automation.reconcileHouseDevices(), { completed: 0, skipped: 0, failed: 0 });
+  assert.deepEqual(await runOwners(true), { completed: 0, skipped: 0, failed: 0 });
   assert.equal(writes.length, 0);
 });
 
 test("last login overrides a conflicting inferred owner for House policy", async (t) => {
   mockReftab(t);
   likelyUser = "7HILLS\\Isaac";
-  assert.deepEqual(await automation.reconcileHouseDevices(), { completed: 1, skipped: 0, failed: 0 });
+  assert.deepEqual(await runOwners(true), { completed: 1, skipped: 0, failed: 0 });
 });
 
 test("does not auto-move when latest login is Isaac but inferred owner is House", async (t) => {
   mockReftab(t);
   login = "7HILLS\\Isaac";
-  assert.deepEqual(await automation.reconcileHouseDevices(), { completed: 0, skipped: 0, failed: 0 });
+  assert.deepEqual(await runOwners(true), { completed: 0, skipped: 0, failed: 0 });
   assert.equal(writes.length, 0);
 });
 
 test("partial Reftab writes retain prior local owner and block automatic retry", async (t) => {
   mockReftab(t);
   checkoutFails = true;
-  assert.deepEqual(await automation.reconcileHouseDevices(), { completed: 0, skipped: 0, failed: 1 });
-  assert.equal(audits[0].status, "REVIEW_REQUIRED");
+  assert.deepEqual(await runOwners(true), { completed: 0, skipped: 0, failed: 1 });
+  assert.equal(audits.find((audit) => audit.action === "reassign-owner")!.status, "REVIEW_REQUIRED");
   assert.equal(assignments[0].assignedToEmployeeId, isaac.employeeId);
   assert.equal(decisions.length, 0);
-  assert.deepEqual(await automation.reconcileHouseDevices(), { completed: 0, skipped: 1, failed: 0 });
+  assert.deepEqual(await runOwners(true), { completed: 0, skipped: 1, failed: 0 });
   assert.equal(writes.length, 2);
 });
 
-test("skips writes held by another sync process", async (t) => {
+test("House automation saves a durable decision before any Reftab request", async (t) => {
   mockReftab(t);
-  locked = false;
-  assert.deepEqual(await automation.reconcileHouseDevices(), { completed: 0, skipped: 1, failed: 0 });
+  assert.deepEqual(await automation.reconcileHouseDevices(), { completed: 0, queued: 1, skipped: 0, failed: 0 });
+  assert.equal(jobs[0].recipientEmail, it.email);
+  assert.equal(jobs[0].status, "QUEUED");
   assert.equal(writes.length, 0);
+  assert.equal(audits[0].action, "queue-action");
 });
 
 test("automatic service rechecks House login before external writes", async (t) => {
@@ -200,31 +233,31 @@ function laptop(name = "SHRI-2SGT624-LT") {
 test("automatically checks in and checks out an LT mismatch and records the new owner", async (t) => {
   mockReftab(t);
   laptop();
-  assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 1, skipped: 0, failed: 0 });
+  assert.deepEqual(await runOwners(), { completed: 1, skipped: 0, failed: 0 });
   assert.deepEqual(writes.map((write) => write.path), ["/api/loans/789", "/api/loans"]);
-  assert.equal(audits[0].actorEmployeeId, "system:laptop-reconciliation");
-  assert.equal(audits[0].status, "SUCCEEDED");
-  assert.match(audits[0].notes, /Automatic -LT ownership policy/);
+  assert.equal(audits.find((audit) => audit.action === "reassign-owner")!.actorEmployeeId, "system:laptop-reconciliation");
+  assert.equal(audits.find((audit) => audit.action === "reassign-owner")!.status, "SUCCEEDED");
+  assert.match(audits.find((audit) => audit.action === "reassign-owner")!.notes, /Automatic -LT ownership policy/);
   assert.equal(assignments[0].assignedToEmployeeId, alice.employeeId);
   assert.equal(decisions[0].proposedOwnerEmployeeId, alice.employeeId);
   const result = await reconciliation.getOwnerReconciliationResult();
   assert.equal(result.rows.length, 0);
   assert.equal(result.reportItems[0].status, "Aligned");
-  assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 0, skipped: 0, failed: 0 });
+  assert.deepEqual(await runOwners(), { completed: 0, skipped: 0, failed: 0 });
   assert.equal(writes.length, 2);
 });
 
 test("LT suffix is case insensitive", async (t) => {
   mockReftab(t);
   laptop("SHRI-2SGT624-lt");
-  assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 1, skipped: 0, failed: 0 });
+  assert.deepEqual(await runOwners(), { completed: 1, skipped: 0, failed: 0 });
 });
 
 for (const name of ["SHRI-2SGT624-TC", "SHRI-2SGT624-LT550", "SHRI-2SGT624-LT-old"]) {
   test(`does not automatically change ordinary owner of ${name}`, async (t) => {
     mockReftab(t);
     laptop(name);
-    assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 0, skipped: 0, failed: 0 });
+    assert.deepEqual(await runOwners(), { completed: 0, skipped: 0, failed: 0 });
     assert.equal(writes.length, 0);
   });
 }
@@ -234,15 +267,15 @@ test("House policy takes priority on LT computers", async (t) => {
   laptop();
   login = likelyUser = "7HILLS\\House";
   expectedCheckoutLnid = 123;
-  assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 1, skipped: 0, failed: 0 });
+  assert.deepEqual(await runOwners(), { completed: 1, skipped: 0, failed: 0 });
   assert.equal(assignments[0].assignedToEmployeeId, it.employeeId);
-  assert.equal(audits[0].actorEmployeeId, "system:house-reconciliation");
+  assert.equal(audits.find((audit) => audit.action === "reassign-owner")!.actorEmployeeId, "system:house-reconciliation");
 });
 
 test("House-only entry point does not process ordinary LT mismatches", async (t) => {
   mockReftab(t);
   laptop();
-  assert.deepEqual(await automation.reconcileHouseDevices(), { completed: 0, skipped: 0, failed: 0 });
+  assert.deepEqual(await runOwners(true), { completed: 0, skipped: 0, failed: 0 });
   assert.equal(writes.length, 0);
 });
 
@@ -252,7 +285,7 @@ test("ordinary LT computers missing from Reftab are not automatically imported",
   assignments = [];
   const result = await reconciliation.getOwnerReconciliationResult();
   assert.equal(result.missingReftabRows.length, 1);
-  assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 0, skipped: 0, failed: 0 });
+  assert.deepEqual(await runOwners(), { completed: 0, skipped: 0, failed: 0 });
   assert.equal(writes.length, 0);
 });
 
@@ -260,9 +293,9 @@ test("does not change LT ownership for an unresolved or inactive NinjaOne user",
   mockReftab(t);
   laptop();
   users = users.filter((user) => user.employeeId !== alice.employeeId);
-  assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 0, skipped: 0, failed: 0 });
+  assert.deepEqual(await runOwners(), { completed: 0, skipped: 0, failed: 0 });
   users.push({ ...alice, isActive: false });
-  assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 0, skipped: 0, failed: 0 });
+  assert.deepEqual(await runOwners(), { completed: 0, skipped: 0, failed: 0 });
   assert.equal(writes.length, 0);
 });
 
@@ -270,18 +303,19 @@ test("partial LT checkout failure requires review and blocks automatic retry", a
   mockReftab(t);
   laptop();
   checkoutFails = true;
-  assert.deepEqual(await automaticOwners.reconcileAutomaticOwnersAfterSync(), { completed: 0, skipped: 0, failed: 1 });
-  assert.equal(audits[0].status, "REVIEW_REQUIRED");
+  assert.deepEqual(await runOwners(false, true), { completed: 0, skipped: 0, failed: 1 });
+  assert.equal(audits.find((audit) => audit.action === "reassign-owner")!.status, "REVIEW_REQUIRED");
   assert.equal(assignments[0].assignedToEmployeeId, isaac.employeeId);
-  assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 0, skipped: 1, failed: 0 });
+  assert.deepEqual(await runOwners(), { completed: 0, skipped: 1, failed: 0 });
   assert.equal(writes.length, 2);
 });
 
-test("LT changes skip a lease held by another sync", async (t) => {
+test("LT automation saves its original recipient for background execution", async (t) => {
   mockReftab(t);
   laptop();
-  locked = false;
-  assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 0, skipped: 1, failed: 0 });
+  assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 0, queued: 1, skipped: 0, failed: 0 });
+  assert.equal(jobs[0].recipientEmail, alice.email);
+  assert.equal(jobs[0].actorEmployeeId, "system:laptop-reconciliation");
   assert.equal(writes.length, 0);
 });
 
@@ -289,7 +323,7 @@ test("conflicting LT assignments are held for review", async (t) => {
   mockReftab(t);
   laptop();
   assignments.push({ ...assignments[0], assignedToEmployeeId: house.employeeId });
-  const result = await automaticOwners.reconcileAutomaticOwners();
+  const result = await runOwners();
   assert.equal(result.completed, 0);
   assert.ok(result.skipped > 0);
   assert.equal(writes.length, 0);
@@ -310,12 +344,12 @@ test("external scheduler keeps manual sync calls from running ownership automati
   const previous = process.env.SYNC_SCHEDULER;
   process.env.SYNC_SCHEDULER = "external";
   try {
-    assert.deepEqual(await automaticOwners.reconcileAutomaticOwnersAfterSync(), { completed: 0, skipped: 0, failed: 0 });
+    assert.deepEqual(await runOwners(false, true), { completed: 0, skipped: 0, failed: 0 });
     assert.equal(writes.length, 0);
     // The scheduled command's direct entry point still executes and attributes
     // the write to automation even with the HTTP hook disabled.
-    assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 1, skipped: 0, failed: 0 });
-    assert.equal(audits[0].actorEmployeeId, "system:house-reconciliation");
+    assert.deepEqual(await runOwners(), { completed: 1, skipped: 0, failed: 0 });
+    assert.equal(audits.find((audit) => audit.action === "reassign-owner")!.actorEmployeeId, "system:house-reconciliation");
   } finally {
     if (previous === undefined) delete process.env.SYNC_SCHEDULER;
     else process.env.SYNC_SCHEDULER = previous;

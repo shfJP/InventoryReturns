@@ -70,6 +70,7 @@ type CategoryOption = {
 };
 
 type ApiResponse = {
+  savedActions?: { outstanding: number; retrying: number; held: number };
   rows: OwnerReconciliationRow[];
   missingReftabRows: MissingReftabAssetRow[];
   count: number;
@@ -137,6 +138,7 @@ export default function OwnerReconciliationPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [summary, setSummary] = useState<ApiResponse["summary"] | null>(null);
+  const [savedActions, setSavedActions] = useState<ApiResponse["savedActions"]>();
   const [missingReftabRows, setMissingReftabRows] = useState<MissingReftabAssetRow[]>([]);
   const missingRowsRef = useRef(missingReftabRows);
   missingRowsRef.current = missingReftabRows;
@@ -217,6 +219,7 @@ export default function OwnerReconciliationPage() {
       setRows(response.rows);
       setMissingReftabRows(response.missingReftabRows);
       setSummary(response.summary);
+      setSavedActions(response.savedActions);
       setCache(response.cache ?? null);
       setDeferHours(response.deferHours ?? 24);
       if (refresh) setMessage("Reconciliation data recalculated.");
@@ -310,6 +313,7 @@ export default function OwnerReconciliationPage() {
         setRows(data.rows);
         setMissingReftabRows(data.missingReftabRows);
         setSummary(data.summary);
+        setSavedActions(data.savedActions);
         setCache(data.cache ?? null);
         setSelected((previous) => new Set([...previous].filter((id) => data.rows.some((row) => row.id === id))));
         setSelectedMissing((previous) => new Set([...previous].filter((id) => data.missingReftabRows.some((row) => row.ninjaDevice.id === id))));
@@ -487,6 +491,11 @@ export default function OwnerReconciliationPage() {
       </div>
 
       <a href="/admin/reconciliation-actions" className="btn-secondary">View saved decisions in Actions &amp; Audit</a>
+      {Boolean(savedActions?.outstanding) && <div role="status" className="rounded-lg border border-[var(--border)] bg-white p-4 text-sm">
+        <a href="/admin/reconciliation-actions" className="font-semibold underline">{savedActions!.outstanding} saved action(s) in Actions &amp; Audit</a>
+        <p>{savedActions!.retrying} awaiting retry after a failed attempt · {savedActions!.held} awaiting verification or approval review.
+          {" "}Saved actions are excluded from Ownership Review and its counts. Their decisions remain saved until completion or an explicit return to review.</p>
+      </div>}
       {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">{error}</div>}
       {message && <div role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-emerald-800">{message}</div>}
       {(progress || results.length > 0) && (
