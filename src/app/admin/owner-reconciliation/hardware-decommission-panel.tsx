@@ -25,7 +25,7 @@ const labels: Record<string, string> = {
 const confirmable = (record: Workflow) => ["AWAITING_CONFIRMATION", "KEPT"].includes(record.status);
 const reftabUrl = (record: Workflow) => `https://www.reftab.com/assets/${encodeURIComponent(record.reftabAid ?? record.assetTag)}`;
 
-async function request(body?: Record<string, unknown>, page = 1) {
+export async function requestDecommission(body?: Record<string, unknown>, page = 1) {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 120_000);
   try {
@@ -46,7 +46,9 @@ async function request(body?: Record<string, unknown>, page = 1) {
   }
 }
 
-export function HardwareDecommissionPanel({ candidate, onDismiss, onReserved, onAttempt }: {
+export function HardwareDecommissionPanel({ candidate, onDismiss, onReserved, onAttempt, refreshKey = 0, disabled = false }: {
+  disabled?: boolean;
+  refreshKey?: number;
   candidate: DecommissionCandidate | null;
   onDismiss: () => void;
   onReserved: (deviceIds: string[]) => void;
@@ -63,7 +65,8 @@ export function HardwareDecommissionPanel({ candidate, onDismiss, onReserved, on
   const [categoryLoading, setCategoryLoading] = useState(false);
   const [review, setReview] = useState<Workflow | null>(null);
   const [verified, setVerified] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [acting, setBusy] = useState(false);
+  const busy = acting || disabled;
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
@@ -89,7 +92,7 @@ export function HardwareDecommissionPanel({ candidate, onDismiss, onReserved, on
       }
     })();
     return () => controller.abort();
-  }, [page, reload, onReserved]);
+  }, [page, reload, onReserved, refreshKey]);
 
   useEffect(() => {
     if (!candidate) return;
@@ -133,7 +136,7 @@ export function HardwareDecommissionPanel({ candidate, onDismiss, onReserved, on
     setError(null);
     setMessage(null);
     try {
-      const data = await request(body);
+      const data = await requestDecommission(body);
       const record = data.workflow as Workflow;
       setReview(record);
       setVerified(false);
@@ -146,7 +149,7 @@ export function HardwareDecommissionPanel({ candidate, onDismiss, onReserved, on
       // Reload durable state after failures, including requests whose result is uncertain.
       if (review || candidate) {
         try {
-          const data = await request({ action: "status", ...(review ? { id: review.id } : { ninjaDeviceId: candidate!.ninjaDevice.id }) });
+          const data = await requestDecommission({ action: "status", ...(review ? { id: review.id } : { ninjaDeviceId: candidate!.ninjaDevice.id }) });
           if (data.workflow && data.workflow.status !== "FAILED") {
             setReview(data.workflow);
             setVerified(false);

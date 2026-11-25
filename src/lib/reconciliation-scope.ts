@@ -13,21 +13,29 @@ export function automaticImportPolicy(row: Pick<MissingReftabAssetRow, "ninjaOwn
 }
 
 // Keep the underlying snapshot complete: write validation and inventory exports
-// need both queues. Partition only at the presentation boundary.
-export function scopeReconciliation(result: OwnerReconciliationResult, automated: boolean) {
-  const rows = result.rows.filter((row) => Boolean(automaticOwnerPolicy(row)) === automated);
-  const missingReftabRows = result.missingReftabRows.filter((row) => Boolean(automaticImportPolicy(row)) === automated);
+// need every queue. Partition only at the presentation boundary.
+export function scopeReconciliation(result: OwnerReconciliationResult, view: boolean | "no-owner-signal") {
+  const noOwnerIds = new Set([
+    ...result.reportItems.filter((item) => item.status === "No owner signal").map((item) => item.ninjaDeviceId),
+    ...result.missingReftabRows.filter((row) => row.ownerStatus === "missing").map((row) => row.ninjaDevice.id),
+  ]);
   const automaticIds = new Set([
     ...result.rows.filter(automaticOwnerPolicy),
     ...result.missingReftabRows.filter(automaticImportPolicy),
   ].map((row) => row.ninjaDevice.id));
-  const reportItems = result.reportItems.filter((item) => automaticIds.has(item.ninjaDeviceId ?? "") === automated);
+  const inScope = (id: string | null) => view === "no-owner-signal"
+    ? id !== null && noOwnerIds.has(id)
+    : !noOwnerIds.has(id) && automaticIds.has(id ?? "") === view;
+  const rows = result.rows.filter((row) => inScope(row.ninjaDevice.id));
+  const missingReftabRows = result.missingReftabRows.filter((row) => inScope(row.ninjaDevice.id));
+  const reportItems = result.reportItems.filter((item) => inScope(item.ninjaDeviceId));
   return {
     ...result, rows, missingReftabRows, reportItems,
     summary: {
       ...result.summary,
       mismatchCount: rows.length,
       missingReftabCount: missingReftabRows.length,
+      missingNinjaOwnerCount: view === "no-owner-signal" ? noOwnerIds.size : 0,
     },
   };
 }

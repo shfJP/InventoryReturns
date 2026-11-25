@@ -10,6 +10,7 @@ import { OwnerEvidence } from "./owner-evidence";
 import { ReconciliationAuditTable } from "./reconciliation-audit-table";
 import { decommissionEligibility } from "@/lib/decommission-policy";
 import { HardwareDecommissionPanel, type DecommissionCandidate } from "./hardware-decommission-panel";
+import { BatchDecommission } from "./batch-decommission";
 import { HOUSE_REFTAB_EMAIL, missingReftabRecipient } from "@/lib/missing-reftab-policy";
 import { HouseDeviceImport } from "./house-device-import";
 import { postReconciliationAction as postJsonWithTimeout, readReconciliationResponse as readResponseJson } from "@/lib/reconciliation-request";
@@ -169,6 +170,11 @@ export default function OwnerReconciliationPage() {
   }, []);
   const reserveDecommissions = useCallback((deviceIds: string[]) => {
     setMissingReftabRows((previous) => previous.filter((row) => !deviceIds.includes(row.ninjaDevice.id)));
+    setSelectedMissing((previous) => {
+      const next = new Set(previous);
+      for (const id of deviceIds) next.delete(id);
+      return next;
+    });
   }, []);
 
   async function exportReport() {
@@ -283,6 +289,8 @@ export default function OwnerReconciliationPage() {
     );
   }, [query, missingReftabRows]);
 
+  const selectableMissingRows = filteredMissingRows.filter((row) =>
+    missingReftabRecipient(row) || decommissionEligibility(row.ninjaDevice).eligible);
   const busy = houseImportBusy || approvingId !== null;
   const blocked = busy || categoryModalRow !== null || decommissionCandidate !== null;
   function acquireAction() {
@@ -434,7 +442,7 @@ export default function OwnerReconciliationPage() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-[var(--text)]">Active Employee Owner Reconciliation</h1>
-          <p className="text-sm text-[var(--muted)]">Manual remediation queue. House assignments and eligible -LT owner changes appear in <Link href="/admin/automated-reconciliation" className="text-[var(--accent)] underline">Automated Reconciliation</Link>. Excel reports include the full inventory.</p>
+          <p className="text-sm text-[var(--muted)]">Manual remediation queue. House assignments and eligible -LT owner changes appear in <Link href="/admin/automated-reconciliation" className="text-[var(--accent)] underline">Automated Reconciliation</Link>. Devices without an owner signal appear in <Link href="/admin/no-owner-signal" className="text-[var(--accent)] underline">No Owner Signal</Link> and are excluded from this queue and its counts. Excel reports include the full inventory.</p>
           <p className="text-[var(--muted)]">{rows.length} owner mismatch{rows.length === 1 ? "" : "es"}, {missingReftabRows.length} missing from Reftab</p>
           {cache && <p className="mt-1 text-xs text-[var(--muted)]">Calculated {new Date(cache.generatedAt).toLocaleString()} · {cache.hit ? "cached result" : "fresh result"} · deferred reviews return after {deferHours} hour(s)</p>}
         </div>
@@ -471,7 +479,6 @@ export default function OwnerReconciliationPage() {
       {summary && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <SummaryPill label="Missing Reftab" value={missingReftabRows.length} />
-          <SummaryPill label="No owner signal" value={summary.missingNinjaOwnerCount} />
           <SummaryPill label="Owner not in directory" value={summary.unresolvedNinjaOwnerCount} />
           <SummaryPill label="Inactive owner" value={summary.inactiveNinjaOwnerCount} />
           <SummaryPill label="Mismatches" value={rows.length} />
@@ -629,11 +636,17 @@ export default function OwnerReconciliationPage() {
               <HouseDeviceImport selectedMode rows={missingReftabRows.filter((row) => selectedMissing.has(row.id))}
                 disabled={blocked} onImported={missingAssetImported} onAttempt={refreshAudit} onBusyChange={setHouseImportBusy}
                 acquire={acquireAction} release={releaseAction} onResult={reportResult} />
+              <BatchDecommission rows={missingReftabRows.filter((row) => selectedMissing.has(row.id))}
+                disabled={blocked} acquire={acquireAction} release={releaseAction}
+                onBusyChange={setHouseImportBusy} onReserved={reserveDecommissions}
+                onAttempt={refreshAudit} onResult={reportResult} />
+              <span className="text-sm">{selectedMissing.size} selected</span>
+              <button type="button" className="btn-secondary" disabled={blocked || !selectedMissing.size} onClick={() => setSelectedMissing(new Set())}>Clear selection</button>
             </div>
           </div>
         </div>
         <p className="border-b border-[var(--border)] px-4 py-2 text-xs text-[var(--muted)]">
-          House imports are handled on the Automated Reconciliation page. Select other missing devices here to add them to Reftab.
+          House imports are handled on the Automated Reconciliation page. Devices without an owner signal appear on the No Owner Signal page and are excluded from this queue and its counts. Select other missing devices here to add them to Reftab or decommission eligible devices.
         </p>
         <p className="border-b border-[var(--border)] px-4 py-2 text-xs text-[var(--muted)]">
           Devices confirmed offline for over one year can be created as Decommissioned in Reftab, then reviewed before optional NinjaOne removal.
@@ -643,8 +656,17 @@ export default function OwnerReconciliationPage() {
             <thead>
               <tr>
                 <th className="table-header"><input type="checkbox" aria-label="Select eligible filtered missing devices" disabled={blocked}
-                  checked={filteredMissingRows.some((row) => missingReftabRecipient(row)) && filteredMissingRows.filter((row) => missingReftabRecipient(row)).every((row) => selectedMissing.has(row.id))}
-                  onChange={(event) => setSelectedMissing(new Set(event.target.checked ? filteredMissingRows.filter((row) => missingReftabRecipient(row)).map((row) => row.id) : []))} /></th>
+                  checked={selectableMissingRows.length > 0 && selectableMissingRows.every((row) => selectedMissing.has(row.id))}
+                  onChange={(event) => {
+                    const checked = event.target.checked;
+                    setSelectedMissing((previous) => {
+                      const next = new Set(previous);
+                      for (const row of selectableMissingRows) {
+                        if (checked) next.add(row.id); else next.delete(row.id);
+                      }
+                      return next;
+                    });
+                  }} /></th>
                 <th className="table-header">Asset</th>
                 <th className="table-header">Serial</th>
                 <th className="table-header">NinjaOne owner</th>
@@ -657,7 +679,7 @@ export default function OwnerReconciliationPage() {
             <tbody>
               {filteredMissingRows.map((row) => (
                 <tr key={row.id} className="border-b border-[var(--border)] transition hover:bg-[var(--table-header-bg)]/50">
-                  <td className="table-cell"><input type="checkbox" aria-label={`Select missing asset ${row.assetTag}`} checked={selectedMissing.has(row.id)} disabled={blocked || !missingReftabRecipient(row)} onChange={() => toggleSelection(row.id, true)} /></td>
+                  <td className="table-cell"><input type="checkbox" aria-label={`Select missing asset ${row.assetTag}`} checked={selectedMissing.has(row.id)} disabled={blocked || (!missingReftabRecipient(row) && !decommissionEligibility(row.ninjaDevice).eligible)} onChange={() => toggleSelection(row.id, true)} /></td>
                   <td className="table-cell">
                     <div className="font-medium text-[var(--text)]">{row.assetTag}</div>
                     <div className="text-xs text-[var(--muted)]">{row.title ?? row.model ?? "-"}</div>
@@ -712,7 +734,7 @@ export default function OwnerReconciliationPage() {
       </section>
 
       <HardwareDecommissionPanel candidate={decommissionCandidate} onDismiss={dismissDecommission}
-        onReserved={reserveDecommissions} onAttempt={refreshAudit} />
+        onReserved={reserveDecommissions} onAttempt={refreshAudit} refreshKey={auditRefresh} disabled={busy} />
       <ReconciliationAuditTable refreshKey={auditRefresh} />
 
       {categoryModalRow && (

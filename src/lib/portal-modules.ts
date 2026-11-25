@@ -53,7 +53,7 @@ export function getPortalModule(id: string | null | undefined): PortalModuleDefi
 }
 
 export function portalModuleForPath(pathname: string): PortalModuleDefinition {
-  if (pathname.startsWith("/admin/owner-reconciliation") || pathname.startsWith("/admin/automated-reconciliation")) {
+  if (pathname.startsWith("/admin/owner-reconciliation") || pathname.startsWith("/admin/automated-reconciliation") || pathname.startsWith("/admin/no-owner-signal")) {
     return getPortalModule("reconciliation")!;
   }
   if (pathname.startsWith("/reports/organization")) {

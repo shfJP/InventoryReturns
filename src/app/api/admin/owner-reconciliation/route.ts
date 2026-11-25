@@ -80,7 +80,7 @@ export async function GET(req: NextRequest) {
 
     const cached = await getCachedOwnerReconciliationResult(req.nextUrl.searchParams.get("refresh") === "1");
     const automated = req.nextUrl.searchParams.get("view") === "automated";
-    const scoped = scopeReconciliation(cached.result, automated);
+    const scoped = scopeReconciliation(cached.result, req.nextUrl.searchParams.get("view") === "no-owner-signal" ? "no-owner-signal" : automated);
     const automationRun = automated ? await prisma.appSetting.findUnique({ where: { key: "scheduled-maintenance:last-run" } }) : null;
     const decisions = await prisma.reconciliationDecision.findMany({
       orderBy: { createdAt: "desc" },
