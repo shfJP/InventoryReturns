@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { isLoggedIn } from "@/lib/auth-session";
@@ -13,6 +13,7 @@ import { HardwareDecommissionPanel, type DecommissionCandidate } from "./hardwar
 import { HOUSE_NINJA_LOGIN, HOUSE_REFTAB_EMAIL, missingReftabRecipient } from "@/lib/missing-reftab-policy";
 import { HouseDeviceImport } from "./house-device-import";
 import { postReconciliationAction as postJsonWithTimeout, readReconciliationResponse as readResponseJson } from "@/lib/reconciliation-request";
+import { runReconciliationBatch } from "@/lib/reconciliation-batch";
 
 type UserSummary = {
   employeeId: string;
@@ -125,6 +126,11 @@ export default function OwnerReconciliationPage() {
   const router = useRouter();
   const [rows, setRows] = useState<OwnerReconciliationRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const actionLock = useRef(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selectedMissing, setSelectedMissing] = useState<Set<string>>(new Set());
+  const [results, setResults] = useState<{ assetTag: string; detail: string; failed?: boolean }[]>([]);
+  const [progress, setProgress] = useState<string | null>(null);
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -147,8 +153,17 @@ export default function OwnerReconciliationPage() {
   const refreshAudit = useCallback(() => setAuditRefresh((value) => value + 1), []);
   const missingAssetImported = useCallback((deviceId: string) => {
     setMissingReftabRows((previous) => previous.filter((row) => row.ninjaDevice.id !== deviceId));
+    setSelectedMissing((previous) => {
+      const next = new Set(previous);
+      next.delete(deviceId);
+      return next;
+    });
     setSummary((previous) => previous ? {
-      ...previous, missingReftabCount: Math.max(0, previous.missingReftabCount - 1),
+      ...previous,
+      equipmentCount: previous.equipmentCount + 1,
+      matchedDeviceCount: previous.matchedDeviceCount + 1,
+      alreadyMatchedOwnerCount: previous.alreadyMatchedOwnerCount + 1,
+      missingReftabCount: Math.max(0, previous.missingReftabCount - 1),
     } : previous);
   }, []);
   const reserveDecommissions = useCallback((deviceIds: string[]) => {
@@ -183,10 +198,12 @@ export default function OwnerReconciliationPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/admin/owner-reconciliation${refresh ? "?refresh=1" : ""}`);
+      const res = await fetch(`/api/admin/owner-reconciliation${refresh ? "?refresh=1" : ""}`, { cache: "no-store" });
       const data = await readResponseJson(res);
       if (!res.ok) throw new Error(responseErrorMessage(data, "Failed to load owner reconciliation"));
       const response = data as ApiResponse;
+      setSelected(new Set());
+      setSelectedMissing(new Set());
       setRows(response.rows);
       setMissingReftabRows(response.missingReftabRows);
       setSummary(response.summary);
@@ -239,7 +256,7 @@ export default function OwnerReconciliationPage() {
 
   useEffect(() => {
     setMismatchPage(1);
-  }, [query, rows.length]);
+  }, [query]);
 
   useEffect(() => {
     setMismatchPage((page) => Math.min(page, mismatchPageCount));
@@ -265,71 +282,81 @@ export default function OwnerReconciliationPage() {
     );
   }, [query, missingReftabRows]);
 
-  async function approve(row: OwnerReconciliationRow) {
-    const confirmed = window.confirm(`Move ${row.assetTag} from ${ownerLabel(row.reftabOwner, row.reftabOwnerEmployeeId)} to ${ownerLabel(row.ninjaOwner, row.ninjaOwner.employeeId)} in Reftab?`);
-    if (!confirmed) return;
-
-    setApprovingId(row.id);
+  const busy = houseImportBusy || approvingId !== null;
+  const blocked = busy || categoryModalRow !== null || decommissionCandidate !== null;
+  function acquireAction() {
+    if (actionLock.current) return false;
+    actionLock.current = true;
+    return true;
+  }
+  function releaseAction() { actionLock.current = false; }
+  function reportResult(assetTag: string, detail: string, failed = false) {
+    setResults((previous) => [...previous, { assetTag, detail, failed }]);
+    setMessage(failed ? null : `${assetTag}: ${detail}`);
+  }
+  function toggleSelection(id: string, missing = false) {
+    const update = missing ? setSelectedMissing : setSelected;
+    update((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  async function performOwnerActions(targets: OwnerReconciliationRow[], decision?: "NO" | "UNSURE" | "DEFER") {
+    if (!targets.length || actionLock.current || blocked) return;
+    let reason: string | null = null;
+    if (decision) {
+      reason = window.prompt(`Reason for ${decision === "DEFER" ? "deferring" : "sending to the correction queue"} ${targets.length} selected item(s):`);
+      if (reason === null) return;
+    } else if (!window.confirm(`Reconcile ${targets.length} item(s) in Reftab? Each asset will be checked in from its current owner and checked out to its listed recipient.\n\n${targets.map((row) => `${row.assetTag}: ${row.reftabOwner?.email ?? row.reftabOwnerEmployeeId} -> ${missingReftabRecipient(row)?.email ?? row.ninjaOwner.email}`).join("\n")}`)) return;
+    if (!acquireAction()) return;
+    setApprovingId(targets[0].id);
     setError(null);
     setMessage(null);
+    let completed = 0;
     try {
-      const { res, data } = await postJsonWithTimeout({ assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id });
-      if (!res.ok) throw new Error(responseErrorMessage(data, "Failed to approve owner change"));
-      setRows((prev) => prev.filter((item) => item.id !== row.id));
-      setSummary((prev) => prev ? {
-        ...prev,
-        mismatchCount: Math.max(0, prev.mismatchCount - 1),
-        alreadyMatchedOwnerCount: prev.alreadyMatchedOwnerCount + 1,
-      } : prev);
-      setMessage(`${row.assetTag} reassigned to ${row.ninjaOwner.displayName}.`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to approve owner change");
+      const outcome = await runReconciliationBatch(targets, async (row) => {
+        setApprovingId(row.id);
+        setProgress(`Processing ${completed + 1} of ${targets.length}: ${row.assetTag}. Keep this page open.`);
+        const { res, data } = await postJsonWithTimeout({
+          action: decision ? "record-decision" : "reassign-owner",
+          assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id,
+          ...(decision ? { decision, reason } : {}),
+        });
+        if (!res.ok) throw new Error(responseErrorMessage(data, "Reconciliation action failed"));
+      }, (row) => {
+        completed++;
+        setRows((previous) => previous.filter((item) => item.id !== row.id));
+        setSelected((previous) => { const next = new Set(previous); next.delete(row.id); return next; });
+        setSummary((previous) => previous ? {
+          ...previous, mismatchCount: Math.max(0, previous.mismatchCount - 1),
+          alreadyMatchedOwnerCount: previous.alreadyMatchedOwnerCount + (decision ? 0 : 1),
+        } : previous);
+        reportResult(row.assetTag, decision === "DEFER" ? "Review deferred." : decision ? "Sent to the inventory correction queue." : `Reftab owner updated to ${missingReftabRecipient(row)?.email ?? row.ninjaOwner.email}.`);
+      }, (row, cause) => {
+        const detail = cause instanceof Error ? cause.message : "Action failed";
+        reportResult(row.assetTag, detail, true);
+        setError(`Stopped at ${row.assetTag}: ${detail} Check the audit history and Reftab before retrying. Remaining items were not processed.`);
+      });
+      setMessage(`${outcome.completed} of ${targets.length} item(s) completed.${outcome.stopped ? " Batch stopped; review the failed item before retrying." : ""}`);
     } finally {
+      setProgress(null);
+      releaseAction();
       setApprovingId(null);
-      setAuditRefresh((value) => value + 1);
+      refreshAudit();
     }
   }
-
+  async function approve(row: OwnerReconciliationRow) { await performOwnerActions([row]); }
   async function recordDecision(row: OwnerReconciliationRow, decision: "NO" | "UNSURE" | "DEFER") {
-    const reason = window.prompt(
-      decision === "NO"
-        ? "Why does this equipment not belong to the suggested person?"
-        : decision === "UNSURE"
-          ? "What should IT investigate?"
-          : "Why is this review being deferred?",
-    );
-    if (reason === null) return;
-    setApprovingId(row.id);
-    setError(null);
-    setMessage(null);
-    try {
-      const { res, data } = await postJsonWithTimeout({
-        action: "record-decision",
-        assetTag: row.assetTag,
-        ninjaDeviceId: row.ninjaDevice.id,
-        decision,
-        reason,
-      });
-      if (!res.ok) throw new Error(responseErrorMessage(data, "Failed to record decision"));
-      setRows((previous) => previous.filter((item) => item.id !== row.id));
-      setMessage(
-        decision === "DEFER"
-          ? `${row.assetTag} review deferred.`
-          : `${row.assetTag} sent to the inventory correction queue.`,
-      );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to record decision");
-    } finally {
-      setApprovingId(null);
-      setAuditRefresh((value) => value + 1);
-    }
+    await performOwnerActions([row], decision);
   }
 
   async function submitMissing(row: MissingReftabAssetRow, categoryId?: string) {
     const recipient = missingReftabRecipient(row);
-    if (!recipient) return;
+    if (!recipient || houseImportBusy || !acquireAction()) return;
 
     setApprovingId(row.id);
+    setProgress(`Adding ${row.assetTag} to Reftab. Keep this page open.`);
     setError(null);
     setCategoryError(null);
     setMessage(null);
@@ -343,6 +370,7 @@ export default function OwnerReconciliationPage() {
       if (!res.ok) throw new Error(responseErrorMessage(data, "Failed to add Reftab asset"));
       missingAssetImported(row.ninjaDevice.id);
       setMessage(`${row.assetTag} added to Reftab and loaned to ${recipient.email}.`);
+      reportResult(row.assetTag, `Created in Reftab and loaned to ${recipient.email}.`);
       setCategoryModalRow(null);
       setSelectedCategoryId("");
     } catch (e) {
@@ -363,16 +391,20 @@ export default function OwnerReconciliationPage() {
           setCategoryLoading(false);
         }
       } else {
+        reportResult(row.assetTag, message, true);
         if (categoryId) setCategoryError(message);
         else setError(message);
       }
     } finally {
+      releaseAction();
+      setProgress(null);
       setApprovingId(null);
       setAuditRefresh((value) => value + 1);
     }
   }
 
   async function addMissing(row: MissingReftabAssetRow) {
+    if (actionLock.current || blocked) return;
     const recipient = missingReftabRecipient(row);
     if (!recipient) return;
     const confirmed = window.confirm(`Add ${row.assetTag} to Reftab and loan it to ${recipient.email}?`);
@@ -412,14 +444,27 @@ export default function OwnerReconciliationPage() {
             placeholder="Search"
             className="input-search"
           />
-          <button type="button" onClick={() => void load(true)} disabled={houseImportBusy || approvingId !== null} className="btn-secondary whitespace-nowrap disabled:opacity-50">
+          <button type="button" onClick={() => void load(true)} disabled={blocked} className="btn-secondary whitespace-nowrap disabled:opacity-50">
             Recalculate
           </button>
         </div>
       </div>
 
-      {error && <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">{error}</div>}
-      {message && <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-emerald-800">{message}</div>}
+      {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">{error}</div>}
+      {message && <div role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-emerald-800">{message}</div>}
+      {(progress || results.length > 0) && (
+        <div className="sticky top-2 z-20 rounded-lg border border-[var(--border)] bg-white p-4 shadow-lg">
+          <p role="status" aria-live="polite" className="font-medium">{progress ?? message ?? "Recent action results"}</p>
+          {results.length > 0 && <details open={!busy} className="mt-2 text-sm">
+            <summary className="cursor-pointer">Action results ({results.length})</summary>
+            <ul className="mt-2 max-h-40 overflow-y-auto space-y-1">
+              {results.map((result, index) => <li key={index} className={result.failed ? "text-red-700" : "text-emerald-800"}>
+                <strong>{result.assetTag}</strong> · {result.failed ? "Needs review: " : "Completed: "}{result.detail}
+              </li>)}
+            </ul>
+          </details>}
+        </div>
+      )}
       {summary && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <SummaryPill label="Reftab items" value={summary.equipmentCount} />
@@ -430,7 +475,7 @@ export default function OwnerReconciliationPage() {
           <SummaryPill label="Owner not in directory" value={summary.unresolvedNinjaOwnerCount} />
           <SummaryPill label="Inactive owner" value={summary.inactiveNinjaOwnerCount} />
           <SummaryPill label="Already aligned" value={summary.alreadyMatchedOwnerCount} />
-          <SummaryPill label="Mismatches" value={summary.mismatchCount} />
+          <SummaryPill label="Mismatches" value={rows.length} />
         </div>
       )}
 
@@ -448,10 +493,23 @@ export default function OwnerReconciliationPage() {
         <p className="border-b border-[var(--border)] px-4 py-2 text-xs text-[var(--muted)]">
           Owner support uses observed logins over the last 30 days. Device match measures asset identity. Review both before changing ownership.
         </p>
+        <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] px-4 py-3 text-sm">
+          <span>{rows.filter((row) => selected.has(row.id)).length} selected across all pages</span>
+          <button type="button" className="btn-secondary" disabled={blocked} onClick={() => setSelected(new Set(filteredRows.map((row) => row.id)))}>Select all filtered ({filteredRows.length})</button>
+          <button type="button" className="btn-secondary" disabled={blocked || !selected.size} onClick={() => setSelected(new Set())}>Clear selection</button>
+          <button type="button" className="btn-secondary" disabled={blocked || !selected.size} onClick={() => void performOwnerActions(rows.filter((row) => selected.has(row.id)))}>Reconcile selected</button>
+          {(["NO", "UNSURE", "DEFER"] as const).map((decision) => <button key={decision} type="button" className="btn-secondary" disabled={blocked || !selected.size}
+            onClick={() => void performOwnerActions(rows.filter((row) => selected.has(row.id)), decision)}>
+            {decision === "NO" ? "No" : decision === "UNSURE" ? "Unsure" : "Defer"} selected
+          </button>)}
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[1380px]">
             <thead>
               <tr>
+                <th className="table-header"><input type="checkbox" aria-label="Select owner mismatches on this page" disabled={blocked || !pagedRows.length}
+                  checked={pagedRows.length > 0 && pagedRows.every((row) => selected.has(row.id))}
+                  onChange={(event) => setSelected((previous) => { const next = new Set(previous); pagedRows.forEach((row) => { if (event.target.checked) next.add(row.id); else next.delete(row.id); }); return next; })} /></th>
                 <th className="table-header">Asset</th>
                 <th className="table-header">Serial</th>
                 <th className="table-header">Reftab owner</th>
@@ -466,6 +524,7 @@ export default function OwnerReconciliationPage() {
             <tbody>
               {pagedRows.map((row) => (
                 <tr key={row.id} className="border-b border-[var(--border)] transition hover:bg-[var(--table-header-bg)]/50">
+                  <td className="table-cell"><input type="checkbox" aria-label={`Select ${row.assetTag}`} checked={selected.has(row.id)} disabled={blocked} onChange={() => toggleSelection(row.id)} /></td>
                   <td className="table-cell">
                     <div className="font-medium text-[var(--text)]">{row.assetTag}</div>
                     <div className="text-xs text-[var(--muted)]">{row.title ?? row.model ?? row.category ?? "-"}</div>
@@ -495,16 +554,16 @@ export default function OwnerReconciliationPage() {
                       <button
                         type="button"
                         onClick={() => approve(row)}
-                      disabled={houseImportBusy || approvingId === row.id}
+                        disabled={blocked}
                         className="rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
                         title="Yes, assign this asset to the suggested person"
                       >
-                        Yes
+                        {approvingId === row.id ? "Processing..." : "Yes"}
                       </button>
                       <button
                         type="button"
                         onClick={() => recordDecision(row, "NO")}
-                        disabled={approvingId === row.id}
+                        disabled={blocked}
                         className="rounded-lg bg-red-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
                         title="No, create an IT correction request"
                       >
@@ -513,7 +572,7 @@ export default function OwnerReconciliationPage() {
                       <button
                         type="button"
                         onClick={() => recordDecision(row, "UNSURE")}
-                        disabled={approvingId === row.id}
+                        disabled={blocked}
                         className="rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs font-medium text-[var(--text)] disabled:opacity-50"
                       >
                         Unsure
@@ -521,7 +580,7 @@ export default function OwnerReconciliationPage() {
                       <button
                         type="button"
                         onClick={() => recordDecision(row, "DEFER")}
-                        disabled={approvingId === row.id}
+                        disabled={blocked}
                         className="rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs font-medium text-[var(--muted)] disabled:opacity-50"
                         title={`Hide this review for ${deferHours} hour(s)`}
                       >
@@ -568,8 +627,12 @@ export default function OwnerReconciliationPage() {
             <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">In NinjaOne, missing from Reftab</h2>
             <div className="flex flex-wrap items-center gap-3">
               <span className="text-sm text-[var(--muted)]">{filteredMissingRows.length} shown</span>
-              <HouseDeviceImport rows={missingReftabRows} disabled={approvingId !== null || categoryModalRow !== null || decommissionCandidate !== null}
-                onImported={missingAssetImported} onAttempt={refreshAudit} onBusyChange={setHouseImportBusy} />
+              <HouseDeviceImport selectedMode rows={missingReftabRows.filter((row) => selectedMissing.has(row.id))}
+                disabled={blocked} onImported={missingAssetImported} onAttempt={refreshAudit} onBusyChange={setHouseImportBusy}
+                acquire={acquireAction} release={releaseAction} onResult={reportResult} />
+              <HouseDeviceImport rows={missingReftabRows} disabled={blocked}
+                onImported={missingAssetImported} onAttempt={refreshAudit} onBusyChange={setHouseImportBusy}
+                acquire={acquireAction} release={releaseAction} onResult={reportResult} />
             </div>
           </div>
         </div>
@@ -583,6 +646,9 @@ export default function OwnerReconciliationPage() {
           <table className="w-full min-w-[980px]">
             <thead>
               <tr>
+                <th className="table-header"><input type="checkbox" aria-label="Select eligible filtered missing devices" disabled={blocked}
+                  checked={filteredMissingRows.some((row) => missingReftabRecipient(row)) && filteredMissingRows.filter((row) => missingReftabRecipient(row)).every((row) => selectedMissing.has(row.id))}
+                  onChange={(event) => setSelectedMissing(new Set(event.target.checked ? filteredMissingRows.filter((row) => missingReftabRecipient(row)).map((row) => row.id) : []))} /></th>
                 <th className="table-header">Asset</th>
                 <th className="table-header">Serial</th>
                 <th className="table-header">NinjaOne owner</th>
@@ -595,6 +661,7 @@ export default function OwnerReconciliationPage() {
             <tbody>
               {filteredMissingRows.map((row) => (
                 <tr key={row.id} className="border-b border-[var(--border)] transition hover:bg-[var(--table-header-bg)]/50">
+                  <td className="table-cell"><input type="checkbox" aria-label={`Select missing asset ${row.assetTag}`} checked={selectedMissing.has(row.id)} disabled={blocked || !missingReftabRecipient(row)} onChange={() => toggleSelection(row.id, true)} /></td>
                   <td className="table-cell">
                     <div className="font-medium text-[var(--text)]">{row.assetTag}</div>
                     <div className="text-xs text-[var(--muted)]">{row.title ?? row.model ?? "-"}</div>
@@ -625,14 +692,14 @@ export default function OwnerReconciliationPage() {
                     <button
                       type="button"
                       onClick={() => addMissing(row)}
-                      disabled={houseImportBusy || approvingId !== null || !missingReftabRecipient(row)}
+                      disabled={blocked || !missingReftabRecipient(row)}
                       className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--accent-hover)] disabled:opacity-50"
                       title={missingReftabRecipient(row) ? `Create and loan to ${missingReftabRecipient(row)!.email}` : ownerStatusLabel(row.ownerStatus)}
                     >
                       {approvingId === row.id ? "Adding" : "Add to Reftab"}
                     </button>
                     {decommissionEligibility(row.ninjaDevice).eligible && <button type="button"
-                      disabled={houseImportBusy || approvingId !== null} onClick={() => setDecommissionCandidate(row)}
+                      disabled={blocked} onClick={() => setDecommissionCandidate(row)}
                       className="rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50">
                       Decommission
                     </button>}
