@@ -20,11 +20,13 @@ let existingLiveAsset: boolean;
 let checkoutFails: boolean;
 let auditFails: boolean;
 let cacheInvalidations: number;
+let computerName: string;
+let categories: { cid: number; name: string }[];
 
 before(async () => {
   const models = {
     ninjaOneDevice: { findMany: async () => [{
-      id: "123", systemName: "HOUSE-DT01", displayName: null, dnsName: null, netbiosName: null,
+      id: "123", systemName: computerName, displayName: null, dnsName: null, netbiosName: null,
       nodeClass: "WINDOWS_WORKSTATION", likelyUser: login,
       detailsJson: JSON.stringify({ serialNumber: "HOUSE01", model: "OptiPlex" }),
       loginObservations: [],
@@ -94,6 +96,8 @@ beforeEach(() => {
   writes = [];
   existingLiveAsset = checkoutFails = auditFails = false;
   cacheInvalidations = 0;
+  computerName = "HOUSE-DT01";
+  categories = [{ cid: 789, name: "Laptops" }, { cid: 456, name: "OptiPlex Desktops" }];
 });
 
 function mockReftab(t: TestContext, expectedLoaneeId = 123) {
@@ -113,7 +117,7 @@ function mockReftab(t: TestContext, expectedLoaneeId = 123) {
       ]);
     }
     if (init?.method === "GET" && url.pathname === "/api/categories") {
-      return Response.json([{ cid: 456, name: "OptiPlex Desktops" }]);
+      return Response.json(categories);
     }
     assert.equal(init?.method, "POST");
     const body = JSON.parse(String(init?.body)) as RecordData;
@@ -136,6 +140,23 @@ test("automatically imports a missing House device and does not repeat it", asyn
   assert.equal(audits[0].actorEmployeeId, "system:house-reconciliation");
   assert.deepEqual(await automation.reconcileHouseDevices(), { completed: 0, skipped: 0, failed: 0 });
   assert.equal(writes.length, 2);
+  assert.equal(writes[0].body.cid, 456);
+});
+
+test("House imports use Desktop even with a laptop hostname and a different selected category", async (t) => {
+  mockReftab(t);
+  computerName = "HOUSE-LT";
+  await service.addMissingReftabAsset({ ...input, categoryId: "789" }, actor);
+  assert.equal(writes[0].body.cid, 456);
+  assert.match(String(audits[0].notes), /Category policy: Desktop/);
+});
+
+test("House imports fail before writing when a Desktop category cannot be identified", async (t) => {
+  mockReftab(t);
+  categories = [{ cid: 789, name: "Laptops" }];
+  await assert.rejects(service.addMissingReftabAsset(input, actor), /House computers require a Desktop category/);
+  assert.equal(writes.length, 0);
+  assert.equal(audits[0].status, "FAILED");
 });
 
 test("automatic imports recheck the House login before writing", async (t) => {

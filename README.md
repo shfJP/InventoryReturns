@@ -398,7 +398,9 @@ Stagger separate tasks to avoid skips. Do not run the old daemon alongside these
 The policies are:
 
 - `7HILLS\House`: assign to `ithelp@sevenhills.org`, creating a missing Reftab
-  asset when category configuration permits.
+  asset in the Desktop category. Imports use `REF_TAB_CREATE_ASSET_DESKTOP_CATEGORY_ID`
+  when configured, otherwise the uniquely identifiable Desktop category from Reftab.
+  House imports stop if the desktop category is missing or ambiguous.
 - Existing Reftab devices whose hostname ends in `-LT` (case insensitive):
   check in the old loan and check out to the active directory owner identified
   by NinjaOne. House takes priority for a House laptop.

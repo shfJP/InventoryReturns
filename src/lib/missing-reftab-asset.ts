@@ -45,11 +45,12 @@ export async function addMissingReftabAsset(
       assetTag: row.assetTag, ninjaDeviceId: row.ninjaDevice.id,
       proposedOwnerEmployeeId: directoryOwner?.employeeId ?? recipient.email,
       proposedOwnerName: houseDevice ? `${recipient.displayName} (${recipient.email})` : recipient.displayName,
-      notes: [note, input.categoryId ? `Selected category: ${input.categoryId}` : ""].filter(Boolean).join("\n"),
+      notes: [note, houseDevice ? "Category policy: Desktop" : input.categoryId ? `Selected category: ${input.categoryId}` : ""].filter(Boolean).join("\n"),
       evidenceJson: JSON.stringify({ ninjaOwnerRaw: row.ninjaOwnerRaw, recipientEmail: recipient.email }),
     }, () => createAndAssignReftabAsset({
       assetTag: row.assetTag, serial: row.serial, model: row.model, title: row.title,
       categoryId: input.categoryId,
+      categoryPolicy: houseDevice ? "desktop" : undefined,
       // House devices must match the requested Reftab email, regardless of directory aliases.
       newOwnerEmployeeId: houseDevice ? "" : recipient.employeeId!,
       newOwnerEmail: recipient.email, newOwnerName: recipient.displayName, note,

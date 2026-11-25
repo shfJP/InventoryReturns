@@ -1804,6 +1804,7 @@ export type ReftabCreateInput = {
   title?: string | null;
   model?: string | null;
   categoryId?: string | null;
+  categoryPolicy?: "desktop";
 };
 
 export type ReftabCreateAndAssignInput = ReftabCreateInput & {
@@ -1935,6 +1936,14 @@ async function inferCreateAssetCategoryIdFromReftab(input: ReftabCreateInput): P
 }
 
 async function inferCreateAssetCategoryId(input: ReftabCreateInput): Promise<string | undefined> {
+  if (input.categoryPolicy === "desktop") {
+    if (REF_TAB_CREATE_ASSET_DESKTOP_CATEGORY_ID) return REF_TAB_CREATE_ASSET_DESKTOP_CATEGORY_ID;
+    const desktops = (await fetchReftabCategories()).filter((category) => tokenSet(category.name).has("desktop"));
+    const exact = desktops.filter((category) => /^desktops?$/i.test(category.name.trim()));
+    if (exact.length === 1) return exact[0].categoryId;
+    if (desktops.length === 1) return desktops[0].categoryId;
+    throw new Error("House computers require a Desktop category. Set REF_TAB_CREATE_ASSET_DESKTOP_CATEGORY_ID to the Reftab desktop category ID. No asset was created.");
+  }
   if (input.categoryId) return input.categoryId;
 
   const explicitCategoryId = explicitCreateAssetCategoryId(input);
