@@ -34,7 +34,10 @@ for (const scenario of ["correct", "wrong owner", "no loan", "ambiguous loans", 
     t.mock.method(globalThis, "fetch", async (input: string, init?: RequestInit) => {
       assert.equal(init?.method ?? "GET", "GET", "verification must never write");
       const url = new URL(input);
-      if (url.pathname === "/api/loanees") return Response.json([{ lnid: 123, email: scenario === "wrong owner" ? "other@example.test" : "owner@example.test" }]);
+      if (url.pathname === "/api/loanees") {
+        assert.equal(url.searchParams.get("q")?.toLowerCase(), "owner@example.test");
+        return Response.json([{ lnid: 123, email: scenario === "wrong owner" ? "other@example.test" : "owner@example.test" }]);
+      }
       assert.equal(url.pathname, "/api/loans");
       assert.equal(url.searchParams.get("aid"), "FRXN7Y2");
       const loan = { lid: 789, lnid: 123, aids: [scenario === "different asset" ? "OTHER123" : "FRXN7Y2"], status: "out" };
@@ -47,7 +50,7 @@ for (const scenario of ["correct", "wrong owner", "no loan", "ambiguous loans", 
 }
 
 for (const targetOffset of [0, 100]) {
-  test(`House import stops scanning loanees after a usable match at offset ${targetOffset}`, async (t) => {
+  test(`House import searches IT Help directly and stops at filtered offset ${targetOffset}`, async (t) => {
     t.mock.method(console, "info", () => {});
     const offsets: number[] = [];
     t.mock.method(globalThis, "fetch", async (input: string, init?: RequestInit) => {
@@ -56,6 +59,7 @@ for (const targetOffset of [0, 100]) {
         return new Response(null, { status: 404 });
       }
       if (url.pathname === "/api/loanees") {
+        assert.equal(url.searchParams.get("q"), "ithelp@sevenhills.org");
         const offset = Number(url.searchParams.get("offset"));
         offsets.push(offset);
         assert.ok(offset <= targetOffset, "must not request pages after finding IT Help");
@@ -77,6 +81,27 @@ for (const targetOffset of [0, 100]) {
     });
     assert.equal(result.loaneeId, String(targetOffset + 6));
     assert.deepEqual(offsets, targetOffset === 0 ? [0] : [0, 100]);
+  });
+}
+
+for (const scenario of ["lookup timeout", "conflicting email"] as const) {
+  test(`recipient ${scenario} stops ownership changes before any write`, async (t) => {
+    t.mock.method(console, "info", () => {});
+    let loaneeReads = 0;
+    t.mock.method(globalThis, "fetch", async (input: string, init?: RequestInit) => {
+      const url = new URL(input);
+      assert.equal(init?.method, "GET", "recipient resolution must finish before any write");
+      if (url.pathname === "/api/loans") return Response.json([{ lid: 789, lnid: 999, aids: ["HOUSE-PC"], status: "out" }]);
+      assert.equal(url.pathname, "/api/loanees");
+      assert.equal(url.searchParams.get("q"), "ithelp@sevenhills.org", "must not fall back to scanning the organization");
+      loaneeReads++;
+      if (scenario === "lookup timeout") throw new Error("recipient lookup timed out");
+      return Response.json([{ lnid: 123, employeeId: "ithelp", email: "someoneelse@example.test" }]);
+    });
+    await assert.rejects(reconcileReftabAssetOwner({
+      assetTag: "HOUSE-PC", newOwnerEmployeeId: "ithelp", newOwnerEmail: "ithelp@sevenhills.org",
+    }), scenario === "lookup timeout" ? /timed out/ : /Could not find a Reftab checkout id/);
+    assert.equal(loaneeReads, 1);
   });
 }
 
@@ -322,7 +347,7 @@ for (const failure of ["validation", "checkout", "timeout"] as const) {
   });
 }
 
-for (const scenario of ["success", "duplicate asset representation", "checkin rejected", "checkout rejected", "multiple items"] as const) {
+for (const scenario of ["success", "duplicate asset representation", "checkin rejected", "checkin 405", "checkout rejected", "multiple items"] as const) {
   test(`owner reassignment handles ${scenario} without hiding a completed check-in`, async (t) => {
     t.mock.method(console, "info", () => {});
     t.mock.method(console, "error", () => {});
@@ -332,6 +357,7 @@ for (const scenario of ["success", "duplicate asset representation", "checkin re
       const url = new URL(input);
       assert.equal(url.origin, "https://reftab.test");
       if (init?.method === "GET" && url.pathname === "/api/loanees") {
+        assert.equal(url.searchParams.get("q"), "owner@example.test");
         loaneeReads++;
         return Response.json([{ lnid: 123, email: "owner@example.test" }]);
       }
@@ -349,6 +375,7 @@ for (const scenario of ["success", "duplicate asset representation", "checkin re
         assert.deepEqual(JSON.parse(String(init?.body)), {
           status: "in", notes: "Owner reconciliation approved from NinjaOne for FRXN7Y2.",
         });
+        if (scenario === "checkin 405") return Response.json({ error: "Method not allowed. Must be one of: OPTIONS" }, { status: 405 });
         return scenario === "checkin rejected"
           ? Response.json({ error: "Check-in rejected" }, { status: 400 })
           : Response.json({});
@@ -374,12 +401,13 @@ for (const scenario of ["success", "duplicate asset representation", "checkin re
     } else {
       await assert.rejects(change, (error) => {
         assert.ok(error instanceof ReftabWriteError);
-        assert.equal(error.outcome, scenario === "checkin rejected" ? "rejected" : "partial");
+        assert.equal(error.outcome, scenario === "checkout rejected" ? "partial" : "rejected");
+        if (scenario === "checkin 405") assert.match(error.message, /405 \(PUT \/loans\/789\)/);
         if (scenario === "checkout rejected") assert.match(error.message, /checked in, but checkout failed/);
         return true;
       });
     }
-    assert.deepEqual(writes, scenario === "checkin rejected"
+    assert.deepEqual(writes, scenario === "checkin rejected" || scenario === "checkin 405"
       ? ["/api/loans/789"] : ["/api/loans/789", "/api/loans"]);
     assert.equal(loaneeReads, 1, "only look up the new owner; loan lookup must not scan loanees");
   });

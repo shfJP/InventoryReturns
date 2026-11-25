@@ -378,6 +378,18 @@ to `loans/{loanId}`; update that value in Coolify as well. Loans containing
 multiple items require a manual check-in so reconciliation cannot return
 unrelated assets.
 
+Recipient lookups use Reftab's documented `GET /loanees?q=<email>` search,
+including IT Help, instead of paging through the organization's whole directory.
+Queued owner verification also filters by the approved email. Inventory syncs
+still fetch the complete directory. Lookup failures stop the action before
+check-in; search results with a conflicting email cannot receive the asset.
+Write failures include the HTTP method and endpoint in **Actions & Audit**.
+If check-in still returns 405 after redeploying, confirm Coolify is running
+the latest commit, `REF_TAB_API_URL=https://www.reftab.com/api`, and
+`REF_TAB_CHECKIN_ENDPOINT_TEMPLATE=loans/{loanId}` (unless using an intentional
+custom proxy). A new error should show `PUT /loans/<loan ID>`; an error showing
+`POST` or `/checkin` identifies an outdated worker or endpoint configuration.
+
 Decommission creation reads the accessible labels from `GET /status` before
 creating an asset. If the saved action reports missing, unreadable, or duplicate
 labels, check Reftab's status-label configuration and the API key's permissions.

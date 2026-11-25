@@ -684,7 +684,7 @@ async function sendReftabJson(endpoint: string, method: "POST" | "PUT" | "DELETE
       requestBody: safeLogBody(body),
       responseBody: truncateForLog(text),
     });
-    throw new ReftabWriteError(`${label} returned ${res.status}: ${text}`, res.status >= 500 || res.status === 408 ? "uncertain" : "rejected");
+    throw new ReftabWriteError(`${label} returned ${res.status} (${method} /${cleanEndpoint}): ${text}`, res.status >= 500 || res.status === 408 ? "uncertain" : "rejected");
   }
   if (!text) return {};
   let data: unknown;
@@ -843,13 +843,14 @@ function buildLoaneeMaps(loanees: ReftabLoanee[]): LoaneeMaps {
   return { lnidToEmail, uidToEmail, lnidToLoanee, uidToLoanee };
 }
 
-async function fetchAllReftabLoanees(stopWhen?: (loanee: ReftabLoanee) => boolean): Promise<ReftabLoanee[]> {
+async function fetchAllReftabLoanees(stopWhen?: (loanee: ReftabLoanee) => boolean, query?: string): Promise<ReftabLoanee[]> {
   const limit = REF_TAB_LOANEES_LIMIT;
   let offset = 0;
   const out: ReftabLoanee[] = [];
 
   while (offset < 50_000) {
-    const data = await fetchReftabJson(`loanees?limit=${limit}&offset=${offset}`, `Reftab loanees offset ${offset}`);
+    const filter = query ? `&q=${encodeURIComponent(query.trim())}` : "";
+    const data = await fetchReftabJson(`loanees?limit=${limit}&offset=${offset}${filter}`, `Reftab loanees offset ${offset}`);
     const list = listFromResponse(data);
     if (list.length === 0) break;
     for (const item of list) {
@@ -1593,6 +1594,8 @@ function loaneeMatches(loanee: ReftabLoanee, user: { employeeId: string; email: 
   const loaneeEmail = normalizeKey(loanee.email);
   const loaneeEmployeeId = normalizeKey(valueToString(loanee.employeeId));
   if (email && loaneeEmail === email) return true;
+  // A search result with a different explicit email is not the approved recipient.
+  if (email && loaneeEmail) return false;
   return Boolean(loaneeCheckoutRef(loanee) && employeeId && loaneeEmployeeId === employeeId);
 }
 
@@ -1640,9 +1643,13 @@ function loaneeWithIdFromResponse(data: unknown, user: { employeeId: string; ema
 }
 
 async function findLoaneeForUser(user: { employeeId: string; email: string }): Promise<ReftabLoanee | null> {
-  // Checkout only needs the first usable match. Inventory syncs still load the
-  // full directory, but imports need not scan thousands of unrelated loanees.
-  const loanees = await fetchAllReftabLoanees((loanee) => loaneeMatches(loanee, user) && Boolean(loaneeCheckoutRef(loanee)));
+  // Reftab documents q for server-side loanee filtering. Resolve the approved
+  // recipient directly instead of paging through the entire organization.
+  // A failed read propagates before any check-in or asset creation can occur.
+  const loanees = await fetchAllReftabLoanees(
+    (loanee) => loaneeMatches(loanee, user) && Boolean(loaneeCheckoutRef(loanee)),
+    user.email || user.employeeId
+  );
   const matches = loanees.filter((loanee) => loaneeMatches(loanee, user));
   const selected = matches.find((loanee) => loaneeCheckoutRef(loanee)) ?? matches[0] ?? null;
   console.info("[reftab] /loanees match scan", {
@@ -1662,6 +1669,8 @@ async function lookupLoaneeForUser(user: { employeeId: string; email: string }):
   const email = encodeURIComponent(user.email);
   const employeeId = encodeURIComponent(user.employeeId);
   for (const template of REF_TAB_LOANEE_LOOKUP_ENDPOINTS) {
+    // The standard loanees endpoint was already searched with q above.
+    if (/^\/?loanees\/?$/.test(template)) continue;
     const endpoint = template
       .replace(/\{email\}/g, email)
       .replace(/\{employeeId\}/g, employeeId)
@@ -1813,7 +1822,10 @@ export async function reconcileReftabAssetOwner(input: ReftabOwnerReconciliation
 // Read back the exact asset and loanee before resolving an uncertain queued write.
 // A missing loan or an ambiguous/missing email is never treated as success.
 export async function verifyReftabQueuedOwner(assetTag: string, email: string) {
-  const maps = buildLoaneeMaps(await fetchAllReftabLoanees());
+  // Read all filtered matches to resolve recipient IDs without loading
+  // unrelated borrowers. Never trust q alone as proof of recipient identity.
+  const loanees = await fetchAllReftabLoanees(undefined, email);
+  const maps = buildLoaneeMaps(loanees.filter((loanee) => normalizeKey(loanee.email) === normalizeKey(email)));
   const matches: Record<string, unknown>[] = [];
   for (let offset = 0; offset < 500_000; offset += ASSETS_LIMIT) {
     const loans = listFromResponse(await fetchReftabJson(
