@@ -4,7 +4,7 @@ import { isCurrentUserAdmin } from "@/lib/admin-auth";
 import { syncReftabToDb } from "@/lib/ref-tab";
 import { markSyncFailed, markSyncFinished, markSyncStarted } from "@/lib/sync-status";
 import { invalidateOwnerReconciliationCache } from "@/lib/owner-reconciliation-cache";
-import { reconcileHouseDevicesAfterSync } from "@/lib/house-reconciliation";
+import { reconcileAutomaticOwnersAfterSync } from "@/lib/automatic-owner-reconciliation";
 
 export const dynamic = "force-dynamic";
 
@@ -16,11 +16,11 @@ export async function POST(req: NextRequest) {
   try {
     await markSyncStarted("reftab");
     const result = await syncReftabToDb();
-    const houseReconciliation = await reconcileHouseDevicesAfterSync();
+    const ownerReconciliation = await reconcileAutomaticOwnersAfterSync();
     await invalidateOwnerReconciliationCache();
     await markSyncFinished("reftab", result);
     console.info(`[admin] Reftab sync requested; result=${JSON.stringify(result)}.`);
-    return NextResponse.json({ ok: true, ...result, houseReconciliation });
+    return NextResponse.json({ ok: true, ...result, ownerReconciliation });
   } catch (e) {
     await markSyncFailed("reftab", e);
     return NextResponse.json(

@@ -7,6 +7,7 @@ const originalPrisma = globals.prisma;
 const it = { employeeId: "IT123", displayName: "IT Help", email: "ithelp@sevenhills.org", upn: null, isActive: true };
 const isaac = { employeeId: "ISAAC", displayName: "Isaac", email: "iadusu@sevenhills.org", upn: null, isActive: true };
 const house = { employeeId: "HOUSE", displayName: "House", email: "house@sevenhills.org", upn: null, isActive: true };
+const alice = { employeeId: "ALICE", displayName: "Alice", email: "alice@sevenhills.org", upn: null, isActive: true };
 let users: typeof it[];
 let assignments: RecordData[];
 let unresolved: RecordData[];
@@ -17,14 +18,17 @@ let login: string;
 let likelyUser: string;
 let checkoutFails: boolean;
 let locked: boolean;
+let computerName: string;
+let expectedCheckoutLnid: number;
 let automation: typeof import("./house-reconciliation");
+let automaticOwners: typeof import("./automatic-owner-reconciliation");
 let reconciliation: typeof import("./owner-reconciliation");
 let ownerService: typeof import("./reconcile-owner");
 
 before(async () => {
   const models = {
     ninjaOneDevice: { findMany: async () => [{
-      id: "123", systemName: "SHRI-2SGT624-TC", displayName: null, dnsName: null, netbiosName: null,
+      id: "123", systemName: computerName, displayName: null, dnsName: null, netbiosName: null,
       nodeClass: "WINDOWS_WORKSTATION", likelyUser,
       detailsJson: JSON.stringify({ lastLoggedOnUser: { userName: login, logonTime: "2026-11-05T21:18:00Z" } }),
       loginObservations: [], loginHistoryStartedAt: new Date("2026-11-05T00:00:00Z"),
@@ -63,12 +67,15 @@ before(async () => {
     REF_TAB_CREATE_MISSING_LOANEES: "false", REF_TAB_CHECKOUT_ENDPOINT: "loans",
   });
   automation = await import("./house-reconciliation");
+  automaticOwners = await import("./automatic-owner-reconciliation");
   reconciliation = await import("./owner-reconciliation");
   ownerService = await import("./reconcile-owner");
 });
 after(() => { if (originalPrisma === undefined) delete globals.prisma; else globals.prisma = originalPrisma; });
 beforeEach(() => {
-  users = [isaac, house, it];
+  users = [isaac, house, it, alice];
+  computerName = "SHRI-2SGT624-TC";
+  expectedCheckoutLnid = 123;
   assignments = [{ assetTag: "0000000468", aid: "0000000468", title: "SHRI-2SGT624-TC", serial: null, assignedToEmployeeId: isaac.employeeId }];
   unresolved = []; audits = []; decisions = []; writes = [];
   login = likelyUser = "7HILLS\\House";
@@ -87,6 +94,7 @@ function mockReftab(t: TestContext) {
         { lnid: 999, employeeId: it.employeeId, email: "wrong@example.test" },
         { lnid: 123, email: "ITHELP@sevenhills.org" },
         { lnid: 456, email: isaac.email },
+        { lnid: 567, email: alice.email },
       ]);
     }
     if (init?.method === "GET" && url.pathname === "/api/loans") {
@@ -98,7 +106,7 @@ function mockReftab(t: TestContext) {
     assert.deepEqual(body.aids, ["0000000468"]);
     if (url.pathname === "/api/loans/789/checkin") return Response.json({});
     assert.equal(url.pathname, "/api/loans");
-    assert.equal(body.lnid, 123, "must checkout by IT Help email rather than a conflicting employee alias");
+    assert.equal(body.lnid, expectedCheckoutLnid, "must checkout to the intended recipient");
     return checkoutFails ? Response.json({ error: "Checkout rejected" }, { status: 400 }) : Response.json({ lid: 790 });
   });
 }
@@ -172,5 +180,120 @@ test("automatic service rechecks House login before external writes", async (t) 
     { assetTag: "0000000468", ninjaDeviceId: "123", requireHouse: true },
     { actorEmployeeId: "system", actorName: "System", actorEmail: null },
   ), /no longer has the House login/);
+  assert.equal(writes.length, 0);
+});
+
+function laptop(name = "SHRI-2SGT624-LT") {
+  computerName = name;
+  assignments[0].title = name;
+  login = likelyUser = alice.email;
+  expectedCheckoutLnid = 567;
+}
+
+test("automatically checks in and checks out an LT mismatch and records the new owner", async (t) => {
+  mockReftab(t);
+  laptop();
+  assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 1, skipped: 0, failed: 0 });
+  assert.deepEqual(writes.map((write) => write.path), ["/api/loans/789/checkin", "/api/loans"]);
+  assert.equal(audits[0].actorEmployeeId, "system:laptop-reconciliation");
+  assert.equal(audits[0].status, "SUCCEEDED");
+  assert.match(audits[0].notes, /Automatic -LT ownership policy/);
+  assert.equal(assignments[0].assignedToEmployeeId, alice.employeeId);
+  assert.equal(decisions[0].proposedOwnerEmployeeId, alice.employeeId);
+  const result = await reconciliation.getOwnerReconciliationResult();
+  assert.equal(result.rows.length, 0);
+  assert.equal(result.reportItems[0].status, "Aligned");
+  assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 0, skipped: 0, failed: 0 });
+  assert.equal(writes.length, 2);
+});
+
+test("LT suffix is case insensitive", async (t) => {
+  mockReftab(t);
+  laptop("SHRI-2SGT624-lt");
+  assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 1, skipped: 0, failed: 0 });
+});
+
+for (const name of ["SHRI-2SGT624-TC", "SHRI-2SGT624-LT550", "SHRI-2SGT624-LT-old"]) {
+  test(`does not automatically change ordinary owner of ${name}`, async (t) => {
+    mockReftab(t);
+    laptop(name);
+    assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 0, skipped: 0, failed: 0 });
+    assert.equal(writes.length, 0);
+  });
+}
+
+test("House policy takes priority on LT computers", async (t) => {
+  mockReftab(t);
+  laptop();
+  login = likelyUser = "7HILLS\\House";
+  expectedCheckoutLnid = 123;
+  assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 1, skipped: 0, failed: 0 });
+  assert.equal(assignments[0].assignedToEmployeeId, it.employeeId);
+  assert.equal(audits[0].actorEmployeeId, "system:house-reconciliation");
+});
+
+test("House-only entry point does not process ordinary LT mismatches", async (t) => {
+  mockReftab(t);
+  laptop();
+  assert.deepEqual(await automation.reconcileHouseDevices(), { completed: 0, skipped: 0, failed: 0 });
+  assert.equal(writes.length, 0);
+});
+
+test("ordinary LT computers missing from Reftab are not automatically imported", async (t) => {
+  mockReftab(t);
+  laptop();
+  assignments = [];
+  const result = await reconciliation.getOwnerReconciliationResult();
+  assert.equal(result.missingReftabRows.length, 1);
+  assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 0, skipped: 0, failed: 0 });
+  assert.equal(writes.length, 0);
+});
+
+test("does not change LT ownership for an unresolved or inactive NinjaOne user", async (t) => {
+  mockReftab(t);
+  laptop();
+  users = users.filter((user) => user.employeeId !== alice.employeeId);
+  assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 0, skipped: 0, failed: 0 });
+  users.push({ ...alice, isActive: false });
+  assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 0, skipped: 0, failed: 0 });
+  assert.equal(writes.length, 0);
+});
+
+test("partial LT checkout failure requires review and blocks automatic retry", async (t) => {
+  mockReftab(t);
+  laptop();
+  checkoutFails = true;
+  assert.deepEqual(await automaticOwners.reconcileAutomaticOwnersAfterSync(), { completed: 0, skipped: 0, failed: 1 });
+  assert.equal(audits[0].status, "REVIEW_REQUIRED");
+  assert.equal(assignments[0].assignedToEmployeeId, isaac.employeeId);
+  assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 0, skipped: 1, failed: 0 });
+  assert.equal(writes.length, 2);
+});
+
+test("LT changes skip a lease held by another sync", async (t) => {
+  mockReftab(t);
+  laptop();
+  locked = false;
+  assert.deepEqual(await automaticOwners.reconcileAutomaticOwners(), { completed: 0, skipped: 1, failed: 0 });
+  assert.equal(writes.length, 0);
+});
+
+test("conflicting LT assignments are held for review", async (t) => {
+  mockReftab(t);
+  laptop();
+  assignments.push({ ...assignments[0], assignedToEmployeeId: house.employeeId });
+  const result = await automaticOwners.reconcileAutomaticOwners();
+  assert.equal(result.completed, 0);
+  assert.ok(result.skipped > 0);
+  assert.equal(writes.length, 0);
+});
+
+test("automatic service rechecks LT suffix before external writes", async (t) => {
+  mockReftab(t);
+  laptop("SHRI-2SGT624-TC");
+  await assert.rejects(ownerService.reconcileOwner(
+    { assetTag: "0000000468", ninjaDeviceId: "123", requireLaptop: true },
+    { actorEmployeeId: "system:laptop-reconciliation", actorName: "System", actorEmail: null },
+  ), /no longer ends in -LT/);
   assert.equal(writes.length, 0);
 });

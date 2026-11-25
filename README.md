@@ -271,6 +271,22 @@ preparation and must have `npm run db:prepare` configured as a deployment step.
 - `npm run db:seed` – seed users + equipment
 - `npm run db:studio` – Prisma Studio
 
+## Automatically correct laptop ownership
+
+After scheduled or manual NinjaOne and Reftab syncs, computers whose hostname
+ends in `-LT` (case insensitive) are automatically reassigned when the app's
+NinjaOne owner differs from the Reftab owner. The NinjaOne owner must resolve
+to an active directory user. The app checks in the current Reftab loan, then
+checks the asset out to that user. Existing eligible mismatches are corrected
+on the next sync; a new ownership-change event is not required.
+
+Each successful correction updates the local assignment and creates an audit
+entry that contributes to the Excel report's completed totals. Partial or
+uncertain writes wait for review before another automatic attempt. The
+`7HILLS\house` policy below takes precedence, including on `-LT` computers.
+This laptop rule corrects existing matched assets; it does not import missing
+laptops. Opening the page or exporting a report does not trigger writes.
+
 ## Add shared house devices to Reftab
 
 After scheduled or manual NinjaOne and Reftab syncs, the app automatically

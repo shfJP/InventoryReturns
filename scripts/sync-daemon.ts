@@ -5,7 +5,7 @@ import { getSyncSettings } from "../src/lib/sync-settings";
 import { markSyncDaemonHeartbeat, markSyncFailed, markSyncFinished, markSyncStarted } from "../src/lib/sync-status";
 import { prisma } from "../src/lib/db";
 import { isSnowflakeConfigured, syncOrganizationReportToSnowflake } from "../src/lib/snowflake";
-import { reconcileHouseDevicesAfterSync } from "../src/lib/house-reconciliation";
+import { reconcileAutomaticOwnersAfterSync } from "../src/lib/automatic-owner-reconciliation";
 import { invalidateOwnerReconciliationCache } from "../src/lib/owner-reconciliation-cache";
 
 let directoryRunning = false;
@@ -53,7 +53,7 @@ async function runReftabSync(reason: string): Promise<void> {
   try {
     await markSyncStarted("reftab");
     const result = await syncReftabToDb();
-    await reconcileHouseDevicesAfterSync();
+    await reconcileAutomaticOwnersAfterSync();
     await invalidateOwnerReconciliationCache();
     await markSyncFinished("reftab", result);
     console.info(`[sync] Reftab complete: ${JSON.stringify(result)}.`);
@@ -77,7 +77,7 @@ async function runNinjaOneSync(reason: string): Promise<void> {
   try {
     await markSyncStarted("ninjaone");
     const result = await syncNinjaOneToDb();
-    await reconcileHouseDevicesAfterSync();
+    await reconcileAutomaticOwnersAfterSync();
     await invalidateOwnerReconciliationCache();
     await markSyncFinished("ninjaone", result);
     console.info(`[sync] NinjaOne complete: ${JSON.stringify(result)}.`);

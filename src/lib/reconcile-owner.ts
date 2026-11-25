@@ -4,15 +4,19 @@ import { HOUSE_REFTAB_EMAIL, isHouseNinjaLogin } from "./missing-reftab-policy";
 import { reconcileReftabAssetOwner } from "./ref-tab";
 import { runAuditedReftabChange } from "./reconciliation-audit";
 import { invalidateOwnerReconciliationCache } from "./owner-reconciliation-cache";
+import { isAutomaticOwnerLaptop } from "./automatic-owner-policy";
 
 export async function reconcileOwner(
-  input: { assetTag: string; ninjaDeviceId: string; requireHouse?: boolean },
+  input: { assetTag: string; ninjaDeviceId: string; requireHouse?: boolean; requireLaptop?: boolean },
   actor: { actorEmployeeId: string; actorName: string; actorEmail: string | null },
 ) {
   const row = await getOwnerReconciliationRow(input.assetTag, input.ninjaDeviceId);
   if (!row) throw new Error("No current owner mismatch found for this asset and NinjaOne device.");
   const house = isHouseNinjaLogin(row.ninjaOwnerRaw);
   if (input.requireHouse && !house) throw new Error("The device no longer has the House login; automatic reconciliation stopped.");
+  if (input.requireLaptop && !isAutomaticOwnerLaptop(row.ninjaDevice)) {
+    throw new Error("The computer name no longer ends in -LT; automatic reconciliation stopped.");
+  }
   const email = house ? HOUSE_REFTAB_EMAIL : row.ninjaOwner.email;
   const owner = house ? await prisma.user.findFirst({
     where: { isActive: true, OR: [
@@ -23,7 +27,9 @@ export async function reconcileOwner(
   }) : row.ninjaOwner;
   const note = house
     ? `House account policy: NinjaOne device ${row.ninjaDevice.id} last logged in as ${row.ninjaOwnerRaw}; assign to ${email}. Previous Reftab owner: ${row.reftabOwnerEmployeeId}.`
-    : `Owner reconciliation approved from NinjaOne device ${row.ninjaDevice.id}. Previous Reftab owner: ${row.reftabOwnerEmployeeId}.`;
+    : input.requireLaptop
+      ? `Automatic -LT ownership policy: NinjaOne computer ${row.ninjaDevice.systemName ?? row.ninjaDevice.netbiosName ?? row.ninjaDevice.dnsName} identifies ${email} as owner. Previous Reftab owner: ${row.reftabOwnerEmployeeId}.`
+      : `Owner reconciliation approved from NinjaOne device ${row.ninjaDevice.id}. Previous Reftab owner: ${row.reftabOwnerEmployeeId}.`;
   try {
     return await runAuditedReftabChange({
       ...actor, action: "reassign-owner", decision: "YES",
